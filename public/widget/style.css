@@ -1,0 +1,80 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+body {
+  display: flex;
+  flex-direction: column;
+}
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  background: #f4f6f8;
+  display: flex;
+  flex-direction: column;
+}
+.message {
+  max-width: 80%;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  line-height: 1.35;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+.message.bot {
+  background: #fff;
+  border: 1px solid #e2e5e9;
+  align-self: flex-start;
+}
+.message.user {
+  background: #2563eb;
+  color: #fff;
+  align-self: flex-end;
+}
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  align-self: flex-start;
+  max-width: 90%;
+}
+.options button {
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #2563eb;
+  background: #fff;
+  color: #2563eb;
+  cursor: pointer;
+  font-size: 14px;
+}
+.options button:hover {
+  background: #eff4ff;
+}
+#composer {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid #e2e5e9;
+  background: #fff;
+}
+#input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 14px;
+}
+#composer button[type="submit"] {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+}

@@ -1,0 +1,467 @@
+import { randomUUID } from "crypto";
+import { DateTime } from "luxon";
+import { pool, EXCLUSION_VIOLATION, isPgError } from "./db";
+import { NotFoundError, SlotConflictError, StaleVersionError, ValidationError } from "./errors";
+import * as googleCalendar from "./googleCalendar";
+import { notifyAppointmentEvent, type Actor } from "./notify";
+import { loadTenantConfigById } from "./tenant";
+import type {
+  Appointment,
+  AppointmentStatus,
+  Channel,
+  Resource,
+  Service,
+  Slot,
+  TenantConfig,
+} from "./types";
+
+const DEFAULT_MIN_NOTICE_MINUTES = 30;
+
+function findService(config: TenantConfig, serviceId: string): Service {
+  const service = config.services.find((s) => s.id === serviceId && s.active);
+  if (!service) throw new NotFoundError("Unknown or inactive service");
+  return service;
+}
+
+function findResource(config: TenantConfig, resourceId: string): Resource {
+  const resource = config.resources.find((r) => r.id === resourceId && r.active);
+  if (!resource) throw new NotFoundError("Unknown or inactive resource");
+  return resource;
+}
+
+// ---------------------------------------------------------------------------
+// Slot generation
+// ---------------------------------------------------------------------------
+
+export interface GenerateSlotsOptions {
+  minNoticeMinutes?: number;
+  slotGranularityMinutes?: number;
+  now?: Date;
+}
+
+/**
+ * Pure candidate-slot generator: hours + service duration only, no DB or
+ * calendar lookups. Kept separate so timezone/hours logic is unit-testable
+ * without a database.
+ */
+export function computeCandidateSlots(
+  config: TenantConfig,
+  resourceId: string,
+  service: Service,
+  rangeStart: Date,
+  rangeEnd: Date,
+  options: GenerateSlotsOptions = {}
+): Slot[] {
+  const tz = config.tenant.timezone;
+  const now = options.now ?? new Date();
+  const minNotice = options.minNoticeMinutes ?? DEFAULT_MIN_NOTICE_MINUTES;
+  const granularity = options.slotGranularityMinutes ?? service.durationMinutes + service.bufferMinutes;
+  const earliestAllowed = DateTime.fromJSDate(now, { zone: tz }).plus({ minutes: minNotice });
+
+  const rules = config.availabilityRules.filter((r) => r.resourceId === resourceId);
+  const slots: Slot[] = [];
+
+  let day = DateTime.fromJSDate(rangeStart, { zone: tz }).startOf("day");
+  const end = DateTime.fromJSDate(rangeEnd, { zone: tz });
+
+  while (day <= end) {
+    const isoDate = day.toISODate();
+    const exceptionRule = rules.find((r) => r.specificDate === isoDate);
+    const weeklyRule = rules.find((r) => r.weekday === day.weekday % 7);
+    const rule = exceptionRule ?? weeklyRule;
+
+    if (rule && !rule.isClosed && rule.startTime && rule.endTime) {
+      const [openH, openM] = rule.startTime.split(":").map(Number);
+      const [closeH, closeM] = rule.endTime.split(":").map(Number);
+      let candidate = day.set({ hour: openH, minute: openM, second: 0, millisecond: 0 });
+      const close = day.set({ hour: closeH, minute: closeM, second: 0, millisecond: 0 });
+
+      while (candidate.plus({ minutes: service.durationMinutes }) <= close) {
+        const candidateUtc = candidate.toUTC().toJSDate();
+        if (candidateUtc >= rangeStart && candidateUtc <= rangeEnd && candidate >= earliestAllowed) {
+          slots.push({
+            startAt: candidate.toUTC().toISO()!,
+            endAt: candidate.plus({ minutes: service.durationMinutes }).toUTC().toISO()!,
+          });
+        }
+        candidate = candidate.plus({ minutes: granularity });
+      }
+    }
+
+    day = day.plus({ days: 1 });
+  }
+
+  return slots;
+}
+
+function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/**
+ * Full availability: candidate slots minus existing app bookings minus (best
+ * effort) Google Calendar busy time. Never throws on a Calendar API failure —
+ * falls back to DB-only availability so a Calendar outage never blocks booking.
+ */
+export async function generateAvailableSlots(
+  config: TenantConfig,
+  resourceId: string,
+  serviceId: string,
+  rangeStart: Date,
+  rangeEnd: Date,
+  options: GenerateSlotsOptions = {}
+): Promise<Slot[]> {
+  const service = findService(config, serviceId);
+  const resource = findResource(config, resourceId);
+  const candidates = computeCandidateSlots(config, resourceId, service, rangeStart, rangeEnd, options);
+  if (candidates.length === 0) return candidates;
+
+  const existing = await pool.query(
+    `SELECT start_at, end_at FROM appointments
+     WHERE tenant_id = $1 AND resource_id = $2 AND status IN ('PENDING_CONFIRMATION', 'CONFIRMED')
+       AND start_at < $4 AND end_at > $3`,
+    [config.tenant.id, resourceId, rangeStart, rangeEnd]
+  );
+  const busyIntervals = existing.rows.map((r) => ({ start: new Date(r.start_at), end: new Date(r.end_at) }));
+
+  if (resource.googleConnectionStatus === "connected") {
+    try {
+      const calendarBusy = await googleCalendar.freeBusyQuery(resource, rangeStart, rangeEnd);
+      busyIntervals.push(...calendarBusy);
+    } catch (err) {
+      console.warn(`[booking] Google freebusy check failed for resource ${resource.id}, falling back to DB-only availability:`, err);
+    }
+  }
+
+  const footprintMinutes = service.durationMinutes + service.bufferMinutes;
+  return candidates.filter((slot) => {
+    const start = new Date(slot.startAt);
+    const footprintEnd = new Date(start.getTime() + footprintMinutes * 60_000);
+    return !busyIntervals.some((busy) => overlaps(start, footprintEnd, busy.start, busy.end));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// State machine
+// ---------------------------------------------------------------------------
+
+export type AppointmentAction = "APPROVE" | "REJECT" | "CANCEL" | "RESCHEDULE";
+
+const TRANSITIONS: Record<AppointmentAction, { from: AppointmentStatus[]; to: AppointmentStatus }> = {
+  APPROVE: { from: ["PENDING_CONFIRMATION"], to: "CONFIRMED" },
+  REJECT: { from: ["PENDING_CONFIRMATION"], to: "REJECTED" },
+  CANCEL: { from: ["PENDING_CONFIRMATION", "CONFIRMED"], to: "CANCELLED" },
+  RESCHEDULE: { from: ["PENDING_CONFIRMATION", "CONFIRMED"], to: "PENDING_CONFIRMATION" },
+};
+
+export function canTransition(current: AppointmentStatus, action: AppointmentAction): boolean {
+  return TRANSITIONS[action].from.includes(current);
+}
+
+// ---------------------------------------------------------------------------
+// Booking creation
+// ---------------------------------------------------------------------------
+
+export interface CreateAppointmentInput {
+  serviceId: string;
+  resourceId: string;
+  startAt: Date;
+  patient: { name: string; phone: string; email?: string };
+  channel: Channel;
+  idempotencyKey?: string;
+}
+
+export interface CreateAppointmentResult {
+  appointmentId: string;
+  status: AppointmentStatus;
+}
+
+function mapAppointment(row: any): Appointment {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    patientId: row.patient_id,
+    serviceId: row.service_id,
+    resourceId: row.resource_id,
+    startAt: row.start_at,
+    endAt: row.end_at,
+    status: row.status,
+    channel: row.channel,
+    idempotencyKey: row.idempotency_key,
+    googleEventId: row.google_event_id,
+    calendarSyncStatus: row.calendar_sync_status,
+    version: row.version,
+  };
+}
+
+export async function createAppointment(
+  config: TenantConfig,
+  input: CreateAppointmentInput
+): Promise<CreateAppointmentResult> {
+  const service = findService(config, input.serviceId);
+  const resource = findResource(config, input.resourceId);
+  if (!input.patient.name?.trim() || !input.patient.phone?.trim()) {
+    throw new ValidationError("Patient name and phone are required");
+  }
+
+  const idempotencyKey = input.idempotencyKey ?? randomUUID();
+  const endAt = new Date(input.startAt.getTime() + service.durationMinutes * 60_000);
+  const targetStatus: AppointmentStatus =
+    config.tenant.confirmationPolicy === "instant" ? "CONFIRMED" : "PENDING_CONFIRMATION";
+
+  const client = await pool.connect();
+  let appointment: Appointment;
+  try {
+    await client.query("BEGIN");
+
+    const existing = await client.query(
+      "SELECT * FROM appointments WHERE tenant_id = $1 AND idempotency_key = $2",
+      [config.tenant.id, idempotencyKey]
+    );
+    if (existing.rowCount && existing.rowCount > 0) {
+      await client.query("COMMIT");
+      const row = existing.rows[0];
+      return { appointmentId: row.id, status: row.status };
+    }
+
+    const patientResult = await client.query(
+      "INSERT INTO patients (tenant_id, name, phone, email) VALUES ($1, $2, $3, $4) RETURNING id",
+      [config.tenant.id, input.patient.name.trim(), input.patient.phone.trim(), input.patient.email ?? null]
+    );
+
+    const appointmentResult = await client.query(
+      `INSERT INTO appointments
+         (tenant_id, patient_id, service_id, resource_id, start_at, end_at, status, channel, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        config.tenant.id,
+        patientResult.rows[0].id,
+        service.id,
+        resource.id,
+        input.startAt,
+        endAt,
+        targetStatus,
+        input.channel,
+        idempotencyKey,
+      ]
+    );
+
+    await client.query("COMMIT");
+    appointment = mapAppointment(appointmentResult.rows[0]);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    if (isPgError(err, EXCLUSION_VIOLATION)) throw new SlotConflictError();
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await syncToCalendar(resource, appointment, "create");
+  await notifyAppointmentEvent(appointment.id, "created", "patient");
+  return { appointmentId: appointment.id, status: appointment.status };
+}
+
+// ---------------------------------------------------------------------------
+// Staff actions: approve / reject / cancel / reschedule
+// ---------------------------------------------------------------------------
+
+async function loadAppointment(tenantId: string, appointmentId: string): Promise<Appointment> {
+  const result = await pool.query("SELECT * FROM appointments WHERE id = $1 AND tenant_id = $2", [
+    appointmentId,
+    tenantId,
+  ]);
+  if (result.rowCount === 0) throw new NotFoundError("Appointment not found");
+  return mapAppointment(result.rows[0]);
+}
+
+async function transition(
+  config: TenantConfig,
+  appointmentId: string,
+  action: AppointmentAction,
+  reasonColumn?: "cancel_reason" | "rejected_reason",
+  reason?: string
+): Promise<Appointment> {
+  const current = await loadAppointment(config.tenant.id, appointmentId);
+  if (!canTransition(current.status, action)) {
+    throw new ValidationError(`Cannot ${action} an appointment in status ${current.status}`);
+  }
+  const newStatus = TRANSITIONS[action].to;
+
+  const extraSet = reasonColumn ? `, ${reasonColumn} = $4` : "";
+  const params = reasonColumn ? [newStatus, appointmentId, current.version, reason ?? null] : [newStatus, appointmentId, current.version];
+
+  const result = await pool.query(
+    `UPDATE appointments SET status = $1, version = version + 1, updated_at = now() ${extraSet}
+     WHERE id = $2 AND version = $3 RETURNING *`,
+    params
+  );
+  if (result.rowCount === 0) throw new StaleVersionError();
+  return mapAppointment(result.rows[0]);
+}
+
+/** Doctor explicitly accepts: the tentative calendar hold becomes a confirmed event. */
+export async function approveAppointment(
+  config: TenantConfig,
+  appointmentId: string,
+  actor: Actor = "staff"
+): Promise<Appointment> {
+  const appointment = await transition(config, appointmentId, "APPROVE");
+  await syncToCalendar(findResource(config, appointment.resourceId), appointment, "update");
+  await notifyAppointmentEvent(appointment.id, "approved", actor);
+  return appointment;
+}
+
+export async function rejectAppointment(
+  config: TenantConfig,
+  appointmentId: string,
+  reason?: string,
+  actor: Actor = "staff"
+): Promise<Appointment> {
+  const appointment = await transition(config, appointmentId, "REJECT", "rejected_reason", reason);
+  await syncToCalendar(findResource(config, appointment.resourceId), appointment, "cancel"); // drop the tentative hold
+  await notifyAppointmentEvent(appointment.id, "rejected", actor);
+  return appointment;
+}
+
+export async function cancelAppointment(
+  config: TenantConfig,
+  appointmentId: string,
+  reason?: string,
+  actor: Actor = "staff"
+): Promise<Appointment> {
+  const appointment = await transition(config, appointmentId, "CANCEL", "cancel_reason", reason);
+  const resource = findResource(config, appointment.resourceId);
+  await syncToCalendar(resource, appointment, "cancel");
+  await notifyAppointmentEvent(appointment.id, "cancelled", actor);
+  return appointment;
+}
+
+export async function rescheduleAppointment(
+  config: TenantConfig,
+  appointmentId: string,
+  newStartAt: Date,
+  actor: Actor = "staff"
+): Promise<Appointment> {
+  const current = await loadAppointment(config.tenant.id, appointmentId);
+  if (!canTransition(current.status, "RESCHEDULE")) {
+    throw new ValidationError(`Cannot reschedule an appointment in status ${current.status}`);
+  }
+  const service = findService(config, current.serviceId);
+  const newEndAt = new Date(newStartAt.getTime() + service.durationMinutes * 60_000);
+  const targetStatus: AppointmentStatus =
+    config.tenant.confirmationPolicy === "instant" ? "CONFIRMED" : "PENDING_CONFIRMATION";
+
+  let appointment: Appointment;
+  try {
+    const result = await pool.query(
+      `UPDATE appointments SET start_at = $1, end_at = $2, status = $3, version = version + 1, updated_at = now()
+       WHERE id = $4 AND version = $5 RETURNING *`,
+      [newStartAt, newEndAt, targetStatus, appointmentId, current.version]
+    );
+    if (result.rowCount === 0) throw new StaleVersionError();
+    appointment = mapAppointment(result.rows[0]);
+  } catch (err) {
+    if (isPgError(err, EXCLUSION_VIOLATION)) throw new SlotConflictError();
+    throw err;
+  }
+
+  const resource = findResource(config, appointment.resourceId);
+  await syncToCalendar(resource, appointment, "update");
+  await notifyAppointmentEvent(appointment.id, "rescheduled", actor);
+  return appointment;
+}
+
+/** The doctor moved the event in their own calendar: the calendar is the source of truth, so mirror it. */
+export async function applyExternalReschedule(
+  config: TenantConfig,
+  appointmentId: string,
+  newStartAt: Date,
+  newEndAt: Date
+): Promise<Appointment> {
+  const current = await loadAppointment(config.tenant.id, appointmentId);
+  if (!canTransition(current.status, "RESCHEDULE")) {
+    throw new ValidationError(`Cannot move an appointment in status ${current.status}`);
+  }
+  let appointment: Appointment;
+  try {
+    const result = await pool.query(
+      `UPDATE appointments SET start_at = $1, end_at = $2, version = version + 1, updated_at = now(), reminder_sent_at = NULL
+       WHERE id = $3 AND version = $4 RETURNING *`,
+      [newStartAt, newEndAt, appointmentId, current.version]
+    );
+    if (result.rowCount === 0) throw new StaleVersionError();
+    appointment = mapAppointment(result.rows[0]);
+  } catch (err) {
+    if (isPgError(err, EXCLUSION_VIOLATION)) throw new SlotConflictError();
+    throw err;
+  }
+  await notifyAppointmentEvent(appointment.id, "rescheduled", "calendar");
+  return appointment;
+}
+
+export async function retrySync(config: TenantConfig, appointmentId: string): Promise<Appointment> {
+  const appointment = await loadAppointment(config.tenant.id, appointmentId);
+  const resource = findResource(config, appointment.resourceId);
+  await syncToCalendar(resource, appointment, appointment.googleEventId ? "update" : "create");
+  return loadAppointment(config.tenant.id, appointmentId);
+}
+
+/** Background retry for appointments whose calendar sync failed earlier. Returns how many were attempted. */
+export async function retryFailedSyncs(limit = 25): Promise<number> {
+  const failed = await pool.query(
+    `SELECT * FROM appointments
+     WHERE calendar_sync_status = 'failed' AND (status IN ('PENDING_CONFIRMATION', 'CONFIRMED') AND end_at > now() OR status IN ('CANCELLED', 'REJECTED'))
+     ORDER BY updated_at ASC LIMIT $1`,
+    [limit]
+  );
+  for (const row of failed.rows) {
+    const appointment = mapAppointment(row);
+    try {
+      const config = await loadTenantConfigById(appointment.tenantId);
+      const resource = findResource(config, appointment.resourceId);
+      const closed = appointment.status === "CANCELLED" || appointment.status === "REJECTED";
+      await syncToCalendar(resource, appointment, closed ? "cancel" : appointment.googleEventId ? "update" : "create");
+    } catch (err) {
+      console.warn(`[booking] background sync retry failed for ${appointment.id}:`, err);
+    }
+  }
+  return failed.rowCount ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Calendar sync (fail-soft: never throws, always records the outcome)
+// ---------------------------------------------------------------------------
+
+async function syncToCalendar(
+  resource: Resource,
+  appointment: Appointment,
+  action: "create" | "update" | "cancel"
+): Promise<void> {
+  if (resource.googleConnectionStatus !== "connected") {
+    await pool.query("UPDATE appointments SET calendar_sync_status = 'skipped' WHERE id = $1", [appointment.id]);
+    return;
+  }
+
+  try {
+    if (action === "cancel") {
+      if (appointment.googleEventId) await googleCalendar.deleteEvent(resource, appointment.googleEventId);
+      await pool.query("UPDATE appointments SET calendar_sync_status = 'synced' WHERE id = $1", [appointment.id]);
+      return;
+    }
+
+    if (action === "create" || !appointment.googleEventId) {
+      const eventId = await googleCalendar.createEvent(resource, appointment);
+      await pool.query(
+        "UPDATE appointments SET google_event_id = $1, calendar_sync_status = 'synced' WHERE id = $2",
+        [eventId, appointment.id]
+      );
+    } else {
+      await googleCalendar.updateEvent(resource, appointment.googleEventId, appointment);
+      await pool.query("UPDATE appointments SET calendar_sync_status = 'synced' WHERE id = $1", [appointment.id]);
+    }
+  } catch (err) {
+    console.warn(`[booking] Calendar sync failed for appointment ${appointment.id}:`, err);
+    await pool.query("UPDATE appointments SET calendar_sync_status = 'failed' WHERE id = $1", [appointment.id]);
+  }
+}
