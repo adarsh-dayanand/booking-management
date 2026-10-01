@@ -1,9 +1,9 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import type { NextFunction, Request, Response } from "express";
-import { config } from "./config";
-import { pool } from "./db";
-import { UnauthorizedError } from "./errors";
+import { config } from "../config";
+import { pool } from "../lib/db";
+import { UnauthorizedError } from "../errors";
 
 export interface StaffClaims {
   staffUserId: string;

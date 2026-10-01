@@ -139,3 +139,59 @@ CREATE TABLE IF NOT EXISTS processed_messages (
   message_id text PRIMARY KEY,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- ---------------------------------------------------------------------------
+-- Patient identity by phone number (no registration step)
+-- A patient row is created automatically on a person's first message and is
+-- enriched as they share details. The phone number (digits, with country code)
+-- is the identity: unique per clinic.
+-- ---------------------------------------------------------------------------
+ALTER TABLE patients ALTER COLUMN name DROP NOT NULL;               -- we may know the number before the name
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS phone_normalized text;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS phone_verified_at timestamptz;  -- set when the number is proven (WhatsApp sender or OTP)
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS name_source text CHECK (name_source IN ('whatsapp_profile', 'patient'));
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS date_of_birth date;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS preferred_language text;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS first_channel text CHECK (first_channel IN ('web', 'whatsapp'));
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS first_seen_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS last_seen_at timestamptz NOT NULL DEFAULT now();
+
+-- The name given for a specific booking (may differ from the profile, e.g. booking for a family member on a shared phone).
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS patient_name text;
+UPDATE appointments a SET patient_name = p.name FROM patients p WHERE a.patient_id = p.id AND a.patient_name IS NULL;
+
+-- Backfill + merge duplicates from the earlier one-row-per-booking model (10-digit numbers assumed Indian, +91).
+UPDATE patients SET phone_normalized =
+  CASE WHEN length(regexp_replace(phone, '\D', '', 'g')) = 10 THEN '91' || regexp_replace(phone, '\D', '', 'g')
+       ELSE regexp_replace(phone, '\D', '', 'g') END
+WHERE phone_normalized IS NULL;
+
+DO $$
+BEGIN
+  UPDATE appointments a SET patient_id = k.keep_id
+  FROM patients p
+  JOIN (SELECT tenant_id, phone_normalized, (array_agg(id ORDER BY created_at, id))[1] AS keep_id
+        FROM patients GROUP BY tenant_id, phone_normalized HAVING count(*) > 1) k
+    ON k.tenant_id = p.tenant_id AND k.phone_normalized = p.phone_normalized
+  WHERE a.patient_id = p.id AND p.id <> k.keep_id;
+
+  DELETE FROM patients p USING (
+    SELECT tenant_id, phone_normalized, (array_agg(id ORDER BY created_at, id))[1] AS keep_id
+    FROM patients GROUP BY tenant_id, phone_normalized HAVING count(*) > 1) k
+  WHERE k.tenant_id = p.tenant_id AND k.phone_normalized = p.phone_normalized AND p.id <> k.keep_id;
+END $$;
+
+ALTER TABLE patients ALTER COLUMN phone_normalized SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS patients_tenant_phone_uniq ON patients (tenant_id, phone_normalized);
+
+-- One-time codes that let a web visitor prove they own a phone number (delivered over WhatsApp).
+CREATE TABLE IF NOT EXISTS phone_otps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id),
+  phone_normalized text NOT NULL,
+  code_hash text NOT NULL,
+  attempts int NOT NULL DEFAULT 0,
+  expires_at timestamptz NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS phone_otps_lookup_idx ON phone_otps (tenant_id, phone_normalized, created_at DESC);

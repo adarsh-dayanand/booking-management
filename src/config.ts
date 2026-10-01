@@ -33,12 +33,20 @@ export const config = {
     notifyTemplate: optional("WHATSAPP_NOTIFY_TEMPLATE"),
     notifyTemplateLang: process.env.WHATSAPP_NOTIFY_TEMPLATE_LANG || "en",
   },
+  // Prepended to 10-digit numbers typed without a country code (India by default).
+  defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE || "91",
   isProduction: process.env.NODE_ENV === "production",
+  // Lets API callers see the agent's tool calls/results and system prompt (Swagger "Try it out"). Off in production unless AGENT_TRACE=1.
+  agentTraceEnabled: process.env.AGENT_TRACE ? process.env.AGENT_TRACE === "1" : process.env.NODE_ENV !== "production",
+  // Swagger UI at /docs. Off in production unless ENABLE_DOCS=1.
+  docsEnabled: process.env.ENABLE_DOCS ? process.env.ENABLE_DOCS === "1" : process.env.NODE_ENV !== "production",
   schedulerEnabled: process.env.DISABLE_SCHEDULER !== "1" && process.env.NODE_ENV !== "test",
   schedulerIntervalMs: Number(process.env.SCHEDULER_INTERVAL_MS || 5 * 60_000),
   gemini: {
     apiKey: optional("GEMINI_API_KEY"),
     model: optional("GEMINI_MODEL"),
+    // Override for proxies or tests; defaults to Google's public endpoint.
+    baseUrl: process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/models",
   },
 };
 

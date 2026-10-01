@@ -1,9 +1,10 @@
 import { randomUUID } from "crypto";
 import { DateTime } from "luxon";
-import { pool, EXCLUSION_VIOLATION, isPgError } from "./db";
-import { NotFoundError, SlotConflictError, StaleVersionError, ValidationError } from "./errors";
-import * as googleCalendar from "./googleCalendar";
-import { notifyAppointmentEvent, type Actor } from "./notify";
+import { pool, EXCLUSION_VIOLATION, isPgError } from "../lib/db";
+import { NotFoundError, SlotConflictError, StaleVersionError, ValidationError } from "../errors";
+import * as googleCalendar from "../calendar/googleCalendar";
+import { notifyAppointmentEvent, type Actor } from "../channels/notify";
+import { touchPatient } from "./patients";
 import { loadTenantConfigById } from "./tenant";
 import type {
   Appointment,
@@ -13,7 +14,7 @@ import type {
   Service,
   Slot,
   TenantConfig,
-} from "./types";
+} from "../types";
 
 const DEFAULT_MIN_NOTICE_MINUTES = 30;
 
@@ -167,6 +168,8 @@ export interface CreateAppointmentInput {
   resourceId: string;
   startAt: Date;
   patient: { name: string; phone: string; email?: string };
+  /** The phone is proven (WhatsApp sender or completed OTP), as opposed to merely typed in. */
+  phoneVerified?: boolean;
   channel: Channel;
   idempotencyKey?: string;
 }
@@ -224,19 +227,25 @@ export async function createAppointment(
       return { appointmentId: row.id, status: row.status };
     }
 
-    const patientResult = await client.query(
-      "INSERT INTO patients (tenant_id, name, phone, email) VALUES ($1, $2, $3, $4) RETURNING id",
-      [config.tenant.id, input.patient.name.trim(), input.patient.phone.trim(), input.patient.email ?? null]
+    // No registration step: the patient profile is keyed by phone number and reused across bookings.
+    const patient = await touchPatient(
+      config.tenant.id,
+      input.patient.phone,
+      { channel: input.channel, name: input.patient.name, nameSource: "patient", verified: input.phoneVerified },
+      client
     );
+    if (input.patient.email) {
+      await client.query("UPDATE patients SET email = COALESCE(email, $2) WHERE id = $1", [patient.id, input.patient.email]);
+    }
 
     const appointmentResult = await client.query(
       `INSERT INTO appointments
-         (tenant_id, patient_id, service_id, resource_id, start_at, end_at, status, channel, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (tenant_id, patient_id, patient_name, service_id, resource_id, start_at, end_at, status, channel, idempotency_key)
+       VALUES ($1, $2, $10, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         config.tenant.id,
-        patientResult.rows[0].id,
+        patient.id,
         service.id,
         resource.id,
         input.startAt,
@@ -244,6 +253,7 @@ export async function createAppointment(
         targetStatus,
         input.channel,
         idempotencyKey,
+        input.patient.name.trim(),
       ]
     );
 
@@ -355,7 +365,7 @@ export async function rescheduleAppointment(
   let appointment: Appointment;
   try {
     const result = await pool.query(
-      `UPDATE appointments SET start_at = $1, end_at = $2, status = $3, version = version + 1, updated_at = now()
+      `UPDATE appointments SET start_at = $1, end_at = $2, status = $3, version = version + 1, updated_at = now(), reminder_sent_at = NULL
        WHERE id = $4 AND version = $5 RETURNING *`,
       [newStartAt, newEndAt, targetStatus, appointmentId, current.version]
     );

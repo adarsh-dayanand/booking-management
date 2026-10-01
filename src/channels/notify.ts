@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { pool } from "./db";
+import { pool } from "../lib/db";
 import * as whatsapp from "./whatsapp";
 
 export type AppointmentEvent = "created" | "approved" | "rejected" | "cancelled" | "rescheduled" | "reminder";
@@ -71,7 +71,7 @@ async function loadContext(appointmentId: string): Promise<{
 } | null> {
   const result = await pool.query(
     `SELECT a.id, a.status, a.channel, a.start_at, a.cancel_reason, a.rejected_reason,
-            p.name AS patient_name, p.phone AS patient_phone, s.name AS service_name, r.name AS resource_name,
+            COALESCE(a.patient_name, p.name) AS patient_name, p.phone AS patient_phone, s.name AS service_name, r.name AS resource_name,
             t.name AS clinic_name, t.timezone, t.whatsapp_phone_number_id, t.staff_whatsapp_number
      FROM appointments a
      JOIN patients p ON p.id = a.patient_id

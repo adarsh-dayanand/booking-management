@@ -8,6 +8,7 @@
 // the same resource/overlapping time and asserting the database's own
 // exclusion constraint — not application code — lets exactly one through.
 
+import "dotenv/config"; // must load before DATABASE_URL_TEST is read below
 import { randomUUID } from "crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
@@ -16,7 +17,7 @@ import type { TenantConfig } from "../types";
 process.env.DATABASE_URL = process.env.DATABASE_URL_TEST ?? process.env.DATABASE_URL;
 
 let pool: Pool;
-let createAppointment: typeof import("../booking").createAppointment;
+let createAppointment: typeof import("../booking/booking").createAppointment;
 let SlotConflictError: typeof import("../errors").SlotConflictError;
 
 let tenantId: string;
@@ -53,8 +54,8 @@ function buildConfig(): TenantConfig {
 }
 
 beforeAll(async () => {
-  ({ pool } = await import("../db"));
-  ({ createAppointment } = await import("../booking"));
+  ({ pool } = await import("../lib/db"));
+  ({ createAppointment } = await import("../booking/booking"));
   ({ SlotConflictError } = await import("../errors"));
 
   const tenantResult = await pool.query(

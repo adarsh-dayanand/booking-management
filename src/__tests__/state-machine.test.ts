@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { canTransition } from "../booking";
-import type { AppointmentAction } from "../booking";
+import { canTransition } from "../booking/booking";
+import type { AppointmentAction } from "../booking/booking";
 import type { AppointmentStatus } from "../types";
 
 const ALL_STATUSES: AppointmentStatus[] = ["PENDING_CONFIRMATION", "CONFIRMED", "REJECTED", "CANCELLED", "COMPLETED"];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeCandidateSlots } from "../booking";
+import { computeCandidateSlots } from "../booking/booking";
 import type { AvailabilityRule, Service, TenantConfig } from "../types";
 
 function buildConfig(timezone: string, rules: AvailabilityRule[]): TenantConfig {

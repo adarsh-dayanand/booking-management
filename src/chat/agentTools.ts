@@ -1,19 +1,23 @@
 import { DateTime } from "luxon";
 import { z } from "zod";
-import * as booking from "./booking";
-import { pool } from "./db";
-import { AppError, SlotConflictError } from "./errors";
-import { notifyStaff } from "./notify";
-import { digitsOnly, isPlausiblePhone, samePhone } from "./phone";
-import type { Channel, TenantConfig } from "./types";
+import * as booking from "../booking/booking";
+import { pool } from "../lib/db";
+import { AppError, SlotConflictError } from "../errors";
+import { notifyStaff } from "../channels/notify";
+import { sendPhoneOtp, verifyPhoneOtp } from "../channels/phoneOtp";
+import { getPatientByPhone, touchPatient, updatePatientDetails, type Patient } from "../booking/patients";
+import { digitsOnly, isPlausiblePhone, normalizePhone } from "../lib/phone";
+import type { Channel, TenantConfig } from "../types";
 
 /** Per-conversation facts the agent can't be talked out of; persisted with the conversation. */
 export interface AgentSession {
-  /** Phone proven to belong to this chat: always set on WhatsApp, set on web only via verify_booking_reference. */
+  /**
+   * Phone (normalised digits) proven to belong to this chat. On WhatsApp the signed sender number is the proof
+   * and this is never needed; on web it is set only by a successful verify_phone_otp.
+   */
   verifiedPhone?: string;
-  /** Appointments created in this very session (web visitors may manage those without further proof). */
-  appointmentIds: string[];
-  verifyAttempts: number;
+  /** Web only: a number the visitor typed or the host page supplied. Unproven — it never grants access to anything. */
+  claimedPhone?: string;
 }
 
 export interface ToolContext {
@@ -35,24 +39,32 @@ const uuid = z.string().uuid();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use YYYY-MM-DD");
 const isoDateTime = z.string().datetime({ offset: true });
 
+/** The phone whose records this chat may read and change, or undefined if the visitor hasn't proven one. */
 function identityPhone(ctx: ToolContext): string | undefined {
-  return ctx.channel === "whatsapp" ? ctx.externalId : ctx.session.verifiedPhone;
+  return ctx.channel === "whatsapp" ? normalizePhone(ctx.externalId) : ctx.session.verifiedPhone;
 }
 
 const NOT_VERIFIED = {
   error:
-    "Patient identity is not verified. Ask the patient for the phone number they booked with and their 6-character booking reference, then call verify_booking_reference.",
+    "The patient's phone number isn't verified yet. Ask for their phone number, call send_phone_otp, then verify_phone_otp with the code they receive on WhatsApp.",
 };
 
+/** The patient profile for the proven identity, created on the spot if this is the first time we see the number. */
+async function identityPatient(ctx: ToolContext): Promise<Patient | null> {
+  const phone = identityPhone(ctx);
+  if (!phone) return null;
+  return touchPatient(ctx.config.tenant.id, phone, { channel: ctx.channel, verified: true });
+}
+
 async function ownsAppointment(ctx: ToolContext, appointmentId: string): Promise<boolean> {
-  if (ctx.session.appointmentIds.includes(appointmentId)) return true;
   const phone = identityPhone(ctx);
   if (!phone) return false;
   const result = await pool.query(
-    `SELECT p.phone FROM appointments a JOIN patients p ON p.id = a.patient_id WHERE a.id = $1 AND a.tenant_id = $2`,
-    [appointmentId, ctx.config.tenant.id]
+    `SELECT 1 FROM appointments a JOIN patients p ON p.id = a.patient_id
+     WHERE a.id = $1 AND a.tenant_id = $2 AND p.phone_normalized = $3`,
+    [appointmentId, ctx.config.tenant.id, phone]
   );
-  return result.rows.length > 0 && samePhone(result.rows[0].phone, phone);
+  return result.rows.length > 0;
 }
 
 function label(iso: string | Date, tz: string): string {
@@ -172,17 +184,16 @@ const tools: Tool[] = [
     declaration: {
       name: "book_appointment",
       description:
-        "Book an appointment. Call ONLY after the patient has explicitly confirmed the service, practitioner, time and their name. startAt must be copied exactly from get_available_slots.",
+        "Book an appointment for the verified patient. Call ONLY after the patient has explicitly confirmed the service, practitioner, time and the name for the booking. startAt must be copied exactly from get_available_slots. The phone number comes from the verified identity — never pass one.",
       parameters: {
         type: "object",
         properties: {
           serviceId: { type: "string" },
           practitionerId: { type: "string" },
           startAt: { type: "string", description: "ISO timestamp exactly as returned by get_available_slots" },
-          patientName: { type: "string" },
-          patientPhone: { type: "string", description: "Required on web chat (with country code). Ignored on WhatsApp." },
+          patientName: { type: "string", description: "Name for this booking. Optional if the profile already has the patient's name." },
         },
-        required: ["serviceId", "practitionerId", "startAt", "patientName"],
+        required: ["serviceId", "practitionerId", "startAt"],
       },
     },
     run: async (raw, ctx) => {
@@ -191,12 +202,13 @@ const tools: Tool[] = [
           serviceId: uuid,
           practitionerId: uuid,
           startAt: isoDateTime,
-          patientName: z.string().trim().min(2).max(100),
-          patientPhone: z.string().optional(),
+          patientName: z.string().trim().min(2).max(100).optional(),
         })
         .parse(raw);
-      const phone = ctx.channel === "whatsapp" ? ctx.externalId : args.patientPhone ?? "";
-      if (!isPlausiblePhone(phone)) return { error: "A valid phone number (with country code) is required. Ask the patient for it." };
+      const patient = await identityPatient(ctx);
+      if (!patient) return NOT_VERIFIED;
+      const name = args.patientName ?? patient.name;
+      if (!name) return { error: "Ask the patient for the name to book under." };
 
       const start = new Date(args.startAt);
       if (!(await slotIsFree(ctx, args.practitionerId, args.serviceId, start))) {
@@ -207,10 +219,10 @@ const tools: Tool[] = [
           serviceId: args.serviceId,
           resourceId: args.practitionerId,
           startAt: start,
-          patient: { name: args.patientName, phone },
+          patient: { name, phone: patient.phone },
+          phoneVerified: true,
           channel: ctx.channel,
         });
-        ctx.session.appointmentIds.push(result.appointmentId);
         const pending = result.status === "PENDING_CONFIRMATION";
         return {
           appointmentId: result.appointmentId,
@@ -230,30 +242,92 @@ const tools: Tool[] = [
   {
     write: false,
     declaration: {
-      name: "verify_booking_reference",
+      name: "send_phone_otp",
       description:
-        "Web chat only: verify who the patient is from the phone number they booked with plus the 6-character booking reference from their confirmation. Needed before listing/cancelling/rescheduling past bookings.",
+        "Web chat only: send a 6-digit verification code to the patient's phone over WhatsApp so they can prove the number is theirs. Needed before booking or managing appointments. Not needed on WhatsApp (the number is already verified).",
+      parameters: { type: "object", properties: { phone: { type: "string", description: "With country code if known" } }, required: ["phone"] },
+    },
+    run: async (raw, ctx) => {
+      const args = z.object({ phone: z.string() }).parse(raw);
+      if (ctx.channel === "whatsapp") return { verified: true, note: "WhatsApp numbers are already verified." };
+      if (!isPlausiblePhone(args.phone)) return { error: "That doesn't look like a valid phone number." };
+      ctx.session.claimedPhone = normalizePhone(args.phone);
+      await touchPatient(ctx.config.tenant.id, args.phone, { channel: "web" }); // capture the contact right away, unverified
+      const result = await sendPhoneOtp(ctx.config.tenant, args.phone);
+      if (result.sent) return { sent: true, note: "Code sent over WhatsApp. Ask the patient to type it here." };
+      if ("devCode" in result) return { sent: false, devCode: result.devCode, note: `${result.note} Tell the tester the code.` };
+      return { error: result.error };
+    },
+  },
+  {
+    write: false,
+    declaration: {
+      name: "verify_phone_otp",
+      description: "Web chat only: check the 6-digit code the patient received. On success the chat is bound to that phone number.",
+      parameters: { type: "object", properties: { phone: { type: "string" }, code: { type: "string" } }, required: ["phone", "code"] },
+    },
+    run: async (raw, ctx) => {
+      const args = z.object({ phone: z.string(), code: z.string().regex(/^\d{6}$/, "must be 6 digits") }).parse(raw);
+      if (ctx.channel === "whatsapp") return { verified: true, note: "WhatsApp numbers are already verified." };
+      const result = await verifyPhoneOtp(ctx.config.tenant.id, args.phone, args.code);
+      if (!result.verified) return { verified: false, error: result.error };
+      ctx.session.verifiedPhone = result.phone;
+      const patient = await touchPatient(ctx.config.tenant.id, result.phone, { channel: "web", verified: true });
+      return { verified: true, knownName: patient.name, hasEmail: Boolean(patient.email) };
+    },
+  },
+  {
+    write: false,
+    declaration: {
+      name: "get_my_profile",
+      description: "The verified patient's saved details (name, email, date of birth, preferred language), so you don't ask for things we already have.",
+      parameters: { type: "object", properties: {} },
+    },
+    run: async (_args, ctx) => {
+      const patient = await identityPatient(ctx);
+      if (!patient) return NOT_VERIFIED;
+      return { name: patient.name, email: patient.email, dateOfBirth: patient.dateOfBirth, preferredLanguage: patient.preferredLanguage };
+    },
+  },
+  {
+    write: true,
+    declaration: {
+      name: "save_patient_details",
+      description:
+        "Save contact details the patient has volunteered (name, email, date of birth, preferred language). Call this as soon as they share any — no form or registration. Never store medical information.",
       parameters: {
         type: "object",
-        properties: { phone: { type: "string" }, reference: { type: "string" } },
-        required: ["phone", "reference"],
+        properties: {
+          name: { type: "string" },
+          email: { type: "string" },
+          dateOfBirth: { type: "string", description: "YYYY-MM-DD" },
+          preferredLanguage: { type: "string", description: "e.g. English, Hindi, Kannada" },
+        },
       },
     },
     run: async (raw, ctx) => {
-      const args = z.object({ phone: z.string(), reference: z.string().regex(/^[0-9a-fA-F]{6}$/) }).parse(raw);
-      if (ctx.channel === "whatsapp") return { verified: true, note: "WhatsApp numbers are already verified." };
-      if (ctx.session.verifyAttempts >= 5) return { error: "Too many attempts. Ask the patient to contact the clinic directly." };
-      ctx.session.verifyAttempts += 1;
-      const result = await pool.query(
-        `SELECT p.phone FROM appointments a JOIN patients p ON p.id = a.patient_id
-         WHERE a.tenant_id = $1 AND a.id::text LIKE $2 || '%'`,
-        [ctx.config.tenant.id, args.reference.toLowerCase()]
-      );
-      if (result.rows.some((r) => samePhone(r.phone, args.phone))) {
-        ctx.session.verifiedPhone = args.phone;
-        return { verified: true };
+      const args = z
+        .object({
+          name: z.string().trim().min(2).max(100).optional(),
+          email: z.string().email().max(200).optional(),
+          dateOfBirth: isoDate.optional(),
+          preferredLanguage: z.string().trim().max(40).optional(),
+        })
+        .parse(raw);
+      if (Object.keys(args).length === 0) return { error: "Nothing to save." };
+
+      let patient = await identityPatient(ctx);
+      if (!patient) {
+        // Unverified web visitor: remember details against their number only if no verified profile exists for it,
+        // so a stranger can't overwrite a real patient's record.
+        const claimed = ctx.session.claimedPhone;
+        if (!claimed) return NOT_VERIFIED;
+        const existing = await getPatientByPhone(ctx.config.tenant.id, claimed);
+        if (existing?.phoneVerified) return NOT_VERIFIED;
+        patient = await touchPatient(ctx.config.tenant.id, claimed, { channel: "web" });
       }
-      return { verified: false, note: "No booking matches that phone and reference." };
+      const saved = await updatePatientDetails(ctx.config.tenant.id, patient.id, args);
+      return { saved: Object.keys(args), profile: { name: saved.name, email: saved.email } };
     },
   },
   {
@@ -265,17 +339,17 @@ const tools: Tool[] = [
     },
     run: async (_args, ctx) => {
       const phone = identityPhone(ctx);
-      if (!phone && ctx.session.appointmentIds.length === 0) return NOT_VERIFIED;
+      if (!phone) return NOT_VERIFIED;
       const result = await pool.query(
         `SELECT a.id, a.status, a.start_at, s.name AS service_name, r.name AS resource_name
          FROM appointments a
          JOIN patients p ON p.id = a.patient_id
          JOIN services s ON s.id = a.service_id
          JOIN resources r ON r.id = a.resource_id
-         WHERE a.tenant_id = $1 AND a.status IN ('PENDING_CONFIRMATION', 'CONFIRMED') AND a.end_at > now()
-           AND (right(regexp_replace(p.phone, '\D', '', 'g'), 10) = right($2, 10) OR a.id = ANY($3::uuid[]))
+         WHERE a.tenant_id = $1 AND p.phone_normalized = $2
+           AND a.status IN ('PENDING_CONFIRMATION', 'CONFIRMED') AND a.end_at > now()
          ORDER BY a.start_at ASC LIMIT 10`,
-        [ctx.config.tenant.id, digitsOnly(phone ?? ""), ctx.session.appointmentIds]
+        [ctx.config.tenant.id, phone]
       );
       return {
         appointments: result.rows.map((r) => ({
@@ -364,7 +438,7 @@ const tools: Tool[] = [
       const args = z
         .object({ reason: z.string().max(500), patientName: z.string().max(100).optional(), patientPhone: z.string().max(30).optional() })
         .parse(raw);
-      const contact = ctx.channel === "whatsapp" ? `+${digitsOnly(ctx.externalId)}` : args.patientPhone ?? "unknown (web chat)";
+      const contact = ctx.channel === "whatsapp" ? `+${digitsOnly(ctx.externalId)}` : args.patientPhone ?? (ctx.session.claimedPhone ? `+${ctx.session.claimedPhone} (unverified)` : "unknown (web chat)");
       const result = await notifyStaff(
         ctx.config.tenant.id,
         `A patient needs a human follow-up.\nName: ${args.patientName ?? "unknown"}\nContact: ${contact}\nChannel: ${ctx.channel}\nReason: ${args.reason}`

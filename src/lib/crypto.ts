@@ -1,5 +1,5 @@
 import { randomBytes, createCipheriv, createDecipheriv } from "crypto";
-import { config } from "./config";
+import { config } from "../config";
 
 // AES-256-GCM, keyed by CRYPTO_KEY (32 random bytes, base64). Used only to
 // encrypt Google refresh tokens at rest in the `resources` table. The key is

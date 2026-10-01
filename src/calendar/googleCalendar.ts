@@ -1,9 +1,19 @@
 import { google } from "googleapis";
-import { signPurposeToken, verifyPurposeToken } from "./auth";
-import { config, isGoogleConfigured } from "./config";
-import { decrypt, encrypt } from "./crypto";
-import { pool } from "./db";
-import type { Appointment, Resource } from "./types";
+import { signPurposeToken, verifyPurposeToken } from "../http/auth";
+import { config, isGoogleConfigured } from "../config";
+import { decrypt, encrypt } from "../lib/crypto";
+import { pool } from "../lib/db";
+import type { Appointment, Resource } from "../types";
+
+// Narrowest scopes that cover what we do (https://developers.google.com/identity/protocols/oauth2/scopes#calendar):
+//  - calendar.events.owned: create/change/delete/list events, only on calendars the doctor owns (their primary one)
+//  - calendar.freebusy:     read availability only
+// If a clinic must use a calendar the doctor doesn't own (e.g. a shared clinic calendar), swap the first for
+// "https://www.googleapis.com/auth/calendar.events".
+const REQUIRED_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.events.owned",
+  "https://www.googleapis.com/auth/calendar.freebusy",
+];
 
 function assertConfigured(): void {
   if (!isGoogleConfigured) {
@@ -27,10 +37,8 @@ export function getAuthUrl(resourceId: string): string {
   return oauthClient().generateAuthUrl({
     access_type: "offline",
     prompt: "consent",
-    scope: [
-      "https://www.googleapis.com/auth/calendar.events",
-      "https://www.googleapis.com/auth/calendar.freebusy",
-    ],
+    scope: REQUIRED_SCOPES,
+    include_granted_scopes: false,
     state: signPurposeToken("gcal-state", { resourceId }, 15 * 60),
   });
 }
@@ -41,6 +49,12 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
   const { resourceId } = verifyPurposeToken("gcal-state", state);
   const client = oauthClient();
   const { tokens } = await client.getToken(code);
+  // Google's granular consent lets the user untick individual permissions; refuse a partial grant up front.
+  const granted = new Set((tokens.scope ?? "").split(" "));
+  const missing = REQUIRED_SCOPES.filter((scope) => !granted.has(scope));
+  if (missing.length > 0) {
+    throw new Error("Calendar access was only partly granted. Please reconnect and tick every permission on Google's consent screen.");
+  }
   if (!tokens.refresh_token) {
     throw new Error(
       "Google did not return a refresh token. Remove this app's prior access at https://myaccount.google.com/permissions and retry — Google only issues a refresh token on first consent."
@@ -88,7 +102,7 @@ async function eventDetails(
   appointment: Appointment
 ): Promise<{ patientName: string; patientPhone: string; serviceName: string }> {
   const result = await pool.query(
-    `SELECT p.name AS patient_name, p.phone AS patient_phone, s.name AS service_name
+    `SELECT COALESCE(a.patient_name, p.name) AS patient_name, p.phone AS patient_phone, s.name AS service_name
      FROM appointments a
      JOIN patients p ON p.id = a.patient_id
      JOIN services s ON s.id = a.service_id

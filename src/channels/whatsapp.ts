@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "crypto";
-import { config } from "./config";
-import type { ChatResponse } from "./guidedFlow";
+import { config } from "../config";
+import type { ChatResponse } from "../chat/guidedFlow";
 
 const GRAPH_API_VERSION = "v20.0";
 

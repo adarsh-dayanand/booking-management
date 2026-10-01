@@ -1,6 +1,6 @@
-import { pool } from "./db";
-import { NotFoundError } from "./errors";
-import type { AvailabilityRule, Resource, Service, Tenant, TenantConfig } from "./types";
+import { pool } from "../lib/db";
+import { NotFoundError } from "../errors";
+import type { AvailabilityRule, Resource, Service, Tenant, TenantConfig } from "../types";
 
 export function mapTenant(row: any): Tenant {
   return {

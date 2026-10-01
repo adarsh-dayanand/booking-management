@@ -1,13 +1,16 @@
 import { randomUUID } from "crypto";
 import path from "path";
+import swaggerUiDist from "swagger-ui-dist";
 import express, { NextFunction, Request, Response } from "express";
 import { config } from "./config";
-import { pool } from "./db";
+import { pool } from "./lib/db";
 import { AppError } from "./errors";
-import { adminRouter } from "./routes/admin";
-import { googleAuthRouter } from "./routes/googleAuth";
-import { webChatRouter } from "./routes/webChat";
-import { whatsappWebhookRouter } from "./routes/whatsappWebhook";
+import { openApiSpec } from "./http/openapi";
+import { adminRouter } from "./http/routes/admin";
+import { googleAuthRouter } from "./http/routes/googleAuth";
+import { startScheduler } from "./jobs/scheduler";
+import { webChatRouter } from "./http/routes/webChat";
+import { whatsappWebhookRouter } from "./http/routes/whatsappWebhook";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -35,6 +38,25 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // The embeddable widget snippet + iframe chat UI + the staff dashboard.
 app.use(express.static(path.join(__dirname, "..", "public")));
 
+if (config.docsEnabled) {
+  app.get("/openapi.json", (_req, res) => res.json(openApiSpec));
+  app.use("/docs/assets", express.static(swaggerUiDist.getAbsoluteFSPath()));
+  app.get(["/docs", "/docs/"], (_req, res) => {
+    res.type("html").send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>Clinic Booking Agent API</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/docs/assets/swagger-ui.css"></head>
+<body><div id="ui"></div>
+<script src="/docs/assets/swagger-ui-bundle.js"></script>
+<script>
+  window.ui = SwaggerUIBundle({
+    url: "/openapi.json", dom_id: "#ui", deepLinking: true, persistAuthorization: true,
+    tryItOutEnabled: true, displayRequestDuration: true, docExpansion: "list",
+  });
+</script></body></html>`);
+  });
+}
+
 app.get("/health", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
@@ -61,4 +83,6 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
 
 app.listen(config.port, () => {
   console.log(`Booking management bot listening on ${config.baseUrl}`);
+  if (config.docsEnabled) console.log(`Swagger UI: ${config.baseUrl}/docs`);
+  startScheduler();
 });

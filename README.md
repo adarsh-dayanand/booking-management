@@ -13,12 +13,11 @@ scoped down from.
 
 - **No migration framework.** `db/schema.sql` is applied once by hand. Before
   any real production use, replace this with versioned migrations.
-- **No background worker.** Calendar sync happens synchronously right after a
-  booking is created/changed. If it fails, the appointment is saved with
-  `calendar_sync_status = 'failed'` and staff can hit **Retry sync** in the
-  dashboard — there's no automatic retry loop.
+- **Background work is an in-process timer**, not a job queue. Fine for one instance; use a real
+  queue/advisory locks before running several. Conversation locking is also in-process.
 - **No fine-grained roles.** Any row in `staff_users` can do anything for its
-  tenant. No permissions, no password reset, no rate limiting on login.
+  tenant; no password reset. Rate limiting is a simple in-memory limiter.
+- **No onboarding API for services/practitioners/hours** — set them up in SQL (see `db/seed.sql`).
 - **Row-level security is not enabled.** Every query is manually scoped by
   `tenant_id` in application code, which is correct but has no DB-level
   backstop yet.
@@ -118,23 +117,73 @@ plus the concurrency integration test (needs `DATABASE_URL_TEST` set up per
 step 4 above) that proves two simultaneous bookings for the same time slot
 can't both succeed.
 
-## Enabling free-text understanding (optional)
+## Swagger UI: try the agent and watch what it does
 
-By default the bot only understands numbered replies or button clicks — no AI,
-no API cost, nothing that can misread a date. This matches the BRD's own
-pilot recommendation and is what runs if you leave `GEMINI_API_KEY` blank.
+`npm run dev`, then open **http://localhost:4000/docs** (raw spec: `/openapi.json`).
 
-If you want patients to be able to type naturally ("next Tuesday afternoon
-for a cleaning") instead of always replying with a number, set
-`GEMINI_API_KEY` (from https://aistudio.google.com/apikey) in `.env`. This adds
-exactly one thing: when a reply doesn't match a number or button id,
-[`src/ai.ts`](src/ai.ts) asks Gemini to pick the closest match from the
-*same* list of options the booking engine already generated. The model never
-talks to the database, never invents an option that wasn't offered, and never
-creates a booking itself — `src/booking.ts` remains the only thing that can do
-that, and it doesn't know or care whether a reply was resolved by number or by
-AI. If the API call fails or the model isn't confident, it's treated exactly
-like an unrecognized reply (the bot re-prompts) — nothing breaks.
+- **`POST /v1/public/{tenantSlug}/chat/messages`** — talk to the agent (`tenantSlug = demo-clinic`; reuse a `sessionId`
+  to continue, `DELETE …/chat/sessions/{sessionId}` to reset).
+  - `?stream=false` (default): one JSON reply. `?stream=true`: Server-Sent Events (`text_delta` as the model writes, then `done`).
+  - `?trace=true`: also returns what the agent did — each `tool_call` (name + arguments), its `tool_result`, and the model's text per step.
+    In a stream these arrive as `tool_call` / `tool_result` / `model_text` events. Swagger UI buffers SSE, so it shows the full
+    ordered log when the turn ends; use `curl -N` to watch live.
+- **`GET …/agent/info`** — the exact system prompt and tool definitions for the clinic.
+- Try both flows: `POST /v1/admin/login` → **Authorize** → `PUT /v1/admin/settings` (`instant` vs `staff_approval`) → book via chat → approve under *admin*.
+
+Docs and trace are on by default outside production; in production set `ENABLE_DOCS=1` / `AGENT_TRACE=1` to expose them.
+
+## Patients: identified by phone number, no registration
+
+The phone number is the identity (one patient per number per clinic; `9876543210`, `+91 98765 43210` and `09876543210`
+are the same person). There is no sign-up step — the first message creates the patient and the agent processes the
+query in the same turn:
+
+- **WhatsApp:** the sender's number (signed by Meta) is both the identity and the proof. The patient is created with the
+  WhatsApp profile name (replaced once they state their real name); as they mention name, email, date of birth or
+  preferred language the agent saves it with `save_patient_details`. Returning patients are recognised and not re-asked.
+- **Web chat:** the number is only a claim until proven. The visitor gets a 6-digit code over WhatsApp (valid 10 minutes,
+  5 attempts, 3 codes/hour per number) via the agent (`send_phone_otp` / `verify_phone_otp`) or
+  `POST …/chat/sessions/{sessionId}/phone/otp` and `…/phone/verify`. Until verified, the agent can't book or manage
+  appointments and is told not to reveal anything stored for that number. A host page can pass `phone`/`name` in the chat
+  request to capture the contact immediately (unverified).
+- With WhatsApp not configured (local dev) the code is returned as `devCode` so the flow can be tried in Swagger. This
+  only happens when `AGENT_TRACE` is on (the default outside production) — keep it off in production.
+- Each booking keeps the name it was made under (`appointments.patient_name`), so booking for a family member on a shared
+  phone doesn't rename the profile. Staff can look patients up with `GET /v1/admin/patients?phone=…` and
+  `GET /v1/admin/patients/{id}`.
+
+## The agent and the two booking flows
+
+With `GEMINI_API_KEY` set, a Gemini agent ([`src/chat/agent.ts`](src/chat/agent.ts)) talks to patients on WhatsApp and the
+web widget: it books, lists, reschedules and cancels appointments and answers questions from the clinic's FAQ
+text. It can only act through the tools in [`src/chat/agentTools.ts`](src/chat/agentTools.ts), which call `booking.ts` —
+the only code that changes appointments. The tools re-check every slot against clinic hours, existing
+bookings and the doctor's live Google free/busy before booking, so a model-invented time is refused.
+Without a key, the old numbered-menu flow runs (book only; responses say `mode: "guided"`).
+
+Each clinic picks one of two flows (`confirmationPolicy`, via `PUT /v1/admin/settings`):
+
+| | `instant` — direct booking | `staff_approval` — doctor accepts |
+|---|---|---|
+| Times offered | Only times free on the doctor's Google Calendar | Same |
+| On booking | Appointment is CONFIRMED and blocks the calendar | Appointment is a request; slot is held as a tentative `[Pending]` calendar event |
+| Doctor | Gets an FYI WhatsApp message | Gets a request and replies `APPROVE <ref>` or `REJECT <ref> <reason>` |
+| Patient | Told it is confirmed | Told it is awaiting the doctor; messaged when accepted/declined |
+
+Settings: `GET/PUT /v1/admin/settings` (`confirmationPolicy`, `staffWhatsappNumber`, `reminderHoursBefore`
+(0 = off), `faqText`, `whatsappPhoneNumberId`). Patients can cancel/reschedule in chat; on WhatsApp their number
+is the identity, on web they give their phone + the 6-character booking reference.
+
+**Doctor's WhatsApp commands** (only from `staffWhatsappNumber`): `APPROVE <ref>`, `REJECT <ref> <reason>`,
+`CANCEL <ref> <reason>`, `PENDING`, `CONNECT` (sends a 20-minute link to connect Google Calendar).
+
+**Background loop** ([`src/jobs/scheduler.ts`](src/jobs/scheduler.ts), every 5 min): polls each connected calendar so a
+deleted event cancels the appointment and a moved event moves it (patient is told either way); retries failed
+calendar syncs; sends reminders. Free-text WhatsApp messages only reach people who wrote in the last 24h, so set
+`WHATSAPP_NOTIFY_TEMPLATE` for reminders/approval requests outside that window.
+
+Re-apply `db/schema.sql` after pulling these changes (idempotent). It also merges the duplicate `patients` rows the old
+one-row-per-booking model created, by phone number.
 
 ## Connecting a real Google Calendar
 
@@ -143,9 +192,8 @@ like an unrecognized reply (the bot re-prompts) — nothing breaks.
    Client ID** of type "Web application".
 2. Add `http://localhost:4000/auth/google/callback` as an authorized redirect URI.
 3. Put the client ID/secret into `.env` as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
-4. Restart the server, log into the staff dashboard, find the resource's id
-   (`GET /v1/admin/resources` with your bearer token), and visit:
-   `http://localhost:4000/auth/google/connect?resourceId=<id>` while logged in.
+4. Restart the server, then have the doctor send `CONNECT` from the staff WhatsApp number (or call
+   `GET /v1/admin/resources/<id>/connect-link` with your bearer token) and open the link.
 5. Approve the consent screen. Future bookings for that resource will now
    check real Google Calendar busy time and create real events.
 
@@ -193,13 +241,18 @@ own resource — nothing is ever shared between tenants.
 ```
 db/            schema.sql (apply once), seed.sql (demo data)
 src/
-  booking.ts        core engine: slot generation, conflict-safe create/reschedule, state machine
-  googleCalendar.ts real Google OAuth + freebusy + event sync
-  guidedFlow.ts     one conversation engine shared by both chat channels
-  whatsapp.ts       WhatsApp Cloud API send + webhook signature check
-  auth.ts           staff login (JWT) + requireAuth middleware
-  tenant.ts         loads a tenant's validated config (services/resources/hours)
-  routes/           thin Express route handlers per concern
+  index.ts          entry point: wires Express, routes, scheduler
+  config.ts         env parsing + lazy validation
+  types.ts, errors.ts   shared types and error classes
+  lib/              db pool, crypto, phone normalisation, rate limiting
+  booking/          booking.ts (slot generation, conflict-safe create/reschedule, state machine), tenant.ts
+  calendar/         googleCalendar.ts (OAuth, freebusy, event sync), calendarPoll.ts (inbound changes)
+  channels/         whatsapp.ts (Cloud API + signature check), notify.ts, staffCommands.ts
+  chat/             guidedFlow.ts (deterministic menu), agent.ts + agentTools.ts (Gemini tool loop),
+                    gemini.ts, conversation.ts (dispatcher), conversationStore.ts
+  http/             auth.ts (JWT + requireAuth), openapi.ts, routes/ (thin Express handlers)
+  jobs/             scheduler.ts (reminders, calendar polling, sync retry)
+  __tests__/        vitest suites
 public/
   widget.js               the embeddable snippet clinics paste into their own site
   widget/chat.html, chat.js, style.css   the chat UI, served in an iframe from this server

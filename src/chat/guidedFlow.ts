@@ -1,9 +1,9 @@
 import { DateTime } from "luxon";
 import { loadConversation, saveConversation } from "./conversationStore";
-import { loadTenantConfig } from "./tenant";
-import * as booking from "./booking";
-import { SlotConflictError } from "./errors";
-import type { Channel, Slot, Tenant, TenantConfig } from "./types";
+import { loadTenantConfig } from "../booking/tenant";
+import * as booking from "../booking/booking";
+import { SlotConflictError } from "../errors";
+import type { Channel, Slot, Tenant, TenantConfig } from "../types";
 
 type Step =
   | "AWAITING_SERVICE"

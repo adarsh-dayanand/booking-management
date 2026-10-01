@@ -1,5 +1,5 @@
-import { pool } from "./db";
-import type { Channel } from "./types";
+import { pool } from "../lib/db";
+import type { Channel } from "../types";
 
 export async function loadConversation<T extends object>(
   tenantId: string,
