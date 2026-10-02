@@ -9,6 +9,7 @@ vi.mock("../chat/agentTools", () => ({
   executeTool: (...a: unknown[]) => executeTool(...a),
 }));
 
+import { DateTime } from "luxon";
 import { buildSystemPrompt, runTurn } from "../chat/agent";
 import type { TenantConfig } from "../types";
 
@@ -47,6 +48,41 @@ describe("system prompt reflects the configured flow", () => {
     const platformOff = buildSystemPrompt({ ...c, tenant: { ...c.tenant, paymentsEnabled: false, collectPayments: true, pricing: { mode: "flat", hourlyRate: 500 } } });
     expect(platformOff).not.toContain("PAYMENTS");
   });
+  describe("time understanding", () => {
+    const now = DateTime.fromISO("2026-10-02T13:40:00", { zone: "Asia/Kolkata" }); // a Friday
+    const prompt = () => buildSystemPrompt(config("instant"), now);
+
+    it("states the clinic's current time in 12-hour form and its zone", () => {
+      expect(prompt()).toContain("Friday, 2 October 2026, 1:40 PM");
+      expect(prompt()).toContain("Asia/Kolkata");
+    });
+
+    it("gives a ready-made calendar so weekday arithmetic is a lookup", () => {
+      const p = prompt();
+      expect(p).toContain("today = Fri 2 Oct (2026-10-02)");
+      expect(p).toContain("tomorrow = Sat 3 Oct (2026-10-03)");
+      expect(p).toContain("Monday = Mon 5 Oct (2026-10-05)");
+      expect(p).toContain("Friday = Fri 16 Oct (2026-10-16)"); // the 15-day window reaches the Friday after next
+    });
+
+    it("tells the model how to read spoken times and never to convert zones", () => {
+      const p = prompt();
+      expect(p).toContain('"1:30 PM"');
+      expect(p).toContain("13:30");
+      expect(p).toContain("half past one");
+      expect(p).toContain("Never convert to UTC");
+      expect(p).toContain("24-hour HH:MM");
+    });
+
+    it("forbids deciding a time is booked from the sample, and contradicting itself", () => {
+      const p = prompt();
+      expect(p).toContain("check_time");
+      expect(p).toContain("SAMPLE");
+      expect(p).toContain("Say a time is unavailable only if a tool said so");
+      expect(p).toContain("Never offer a time and call it unavailable in the same message");
+    });
+  });
+
   it("includes clinic FAQ text", () => {
     expect(buildSystemPrompt(config("instant"))).toContain("Open Mon-Fri 9-5.");
   });
@@ -119,5 +155,47 @@ describe("runTurn tool loop", () => {
     const c = config("instant");
     await expect(runTurn(c, ctx(c), [], "loop")).rejects.toThrow("Too many tool steps");
     expect(generate).toHaveBeenCalledTimes(6);
+  });
+});
+
+describe("a transient model failure doesn't lose the patient's reply", () => {
+  const c = config("instant");
+  const empty = { candidates: [{ content: undefined, finishReason: "OTHER" }] };
+
+  it("retries once after an empty model response", async () => {
+    generate.mockResolvedValueOnce(empty).mockResolvedValueOnce(text("Hello, how can I help?"));
+    const r = await runTurn(c, ctx(c), [], "hi");
+    expect(r.text).toBe("Hello, how can I help?");
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries after a 503, and after a reply with no text", async () => {
+    const { GeminiError } = await import("../chat/gemini");
+    generate.mockRejectedValueOnce(new GeminiError("Gemini request failed (503): overloaded")).mockResolvedValueOnce({ candidates: [{ content: { role: "model", parts: [{ text: "", thought: true }] } }] }).mockResolvedValueOnce(text("ok"));
+    // 503 → retried (attempt 2: a thoughts-only reply, which counts as empty → but that was already the one retry) so this surfaces
+    await expect(runTurn(c, ctx(c), [], "hi")).rejects.toThrow("Model returned no text");
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after one retry", async () => {
+    generate.mockResolvedValue(empty);
+    await expect(runTurn(c, ctx(c), [], "hi")).rejects.toThrow("Empty model response");
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a real error such as a bad request", async () => {
+    const { GeminiError } = await import("../chat/gemini");
+    generate.mockRejectedValue(new GeminiError("Gemini request failed (400): invalid argument"));
+    await expect(runTurn(c, ctx(c), [], "hi")).rejects.toThrow("(400)");
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a timeout, and tools run only once across the retry", async () => {
+    const timeout = Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    executeTool.mockResolvedValue({ ok: true });
+    generate.mockResolvedValueOnce(call("list_services", {})).mockRejectedValueOnce(timeout).mockResolvedValueOnce(text("Here you go"));
+    const r = await runTurn(c, ctx(c), [], "what services?");
+    expect(r.text).toBe("Here you go");
+    expect(executeTool).toHaveBeenCalledTimes(1); // the failed model call was retried, the tool was not re-run
   });
 });

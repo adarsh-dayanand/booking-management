@@ -86,6 +86,11 @@ whatsappWebhookRouter.post("/", async (req, res) => {
     for (const change of entry?.changes ?? []) {
       const phoneNumberId: string | undefined = change?.value?.metadata?.phone_number_id;
       if (!phoneNumberId) continue;
+      // Delivery receipts: the only place Meta says whether a message really reached the phone, and why not.
+      for (const status of change.value.statuses ?? []) {
+        const line = whatsapp.describeStatus(status);
+        if (line) (status.status === "failed" ? console.warn : console.log)(line);
+      }
       for (const message of change.value.messages ?? []) {
         try {
           await processMessage(phoneNumberId, message, change.value.contacts);

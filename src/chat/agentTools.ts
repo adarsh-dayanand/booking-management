@@ -1,10 +1,12 @@
 import { DateTime } from "luxon";
 import { z } from "zod";
 import * as booking from "../booking/booking";
-import { identityPatient, identityPhone, isoDate, isoDateTime, label, NOT_VERIFIED, ownsAppointment, uuid, type AgentSession, type Tool, type ToolContext, type ToolResult } from "./toolKit";
+import { identityPatient, identityPhone, isoDate, label, NOT_VERIFIED, ownsAppointment, uuid, type AgentSession, type Tool, type ToolContext, type ToolResult } from "./toolKit";
 import { paymentTools } from "./paymentTools";
+import { freeRanges, resolveIds, resolveWhen, unavailableReply, whenFields, whenParameters, whenTools } from "./whenTools";
+import { diagnoseTime } from "../booking/availability";
 import { paymentActive, quoteFee, formatRupees } from "../payments/pricing";
-import { groupByDay, nearestTo, spreadEvenly } from "../booking/slotPicker";
+import { groupByDay, nearestSpaced, spreadEvenly } from "../booking/slotPicker";
 import { pool } from "../lib/db";
 import { AppError, SlotConflictError } from "../errors";
 import { notifyStaff } from "../channels/notify";
@@ -13,12 +15,14 @@ import { getPatientByPhone, touchPatient, updatePatientDetails } from "../bookin
 import { digitsOnly, isPlausiblePhone, normalizePhone } from "../lib/phone";
 export type { AgentSession, ToolContext } from "./toolKit";
 
-async function slotIsFree(ctx: ToolContext, resourceId: string, serviceId: string, start: Date): Promise<boolean> {
-  // Re-derive availability (clinic hours + existing bookings + the doctor's live Google free/busy) rather than trusting the model's time.
-  const slots = await booking.generateAvailableSlots(
-    ctx.config, resourceId, serviceId, new Date(start.getTime() - 60_000), new Date(start.getTime() + 60_000)
-  );
-  return slots.some((s) => new Date(s.startAt).getTime() === start.getTime());
+/** Re-derives availability (hours + bookings + the doctor's live calendar) instead of trusting a model-supplied time. */
+async function checkBookable(ctx: ToolContext, resourceId: string, serviceId: string, args: { date?: string; time?: string; startAt?: string }): Promise<{ start: Date } | { reply: ToolResult }> {
+  const when = resolveWhen(ctx, args);
+  if ("error" in when) return { reply: when };
+  if (!ctx.config.services.some((sv) => sv.id === serviceId)) return { reply: { error: "Unknown service. Call list_services." } };
+  if (!ctx.config.resources.some((r) => r.id === resourceId)) return { reply: { error: "Unknown practitioner. Call list_practitioners." } };
+  const check = await diagnoseTime(ctx.config, resourceId, serviceId, when.start);
+  return check.available ? { start: when.start } : { reply: unavailableReply(ctx, check) };
 }
 
 const PART_OF_DAY: Record<string, (hour: number) => boolean> = {
@@ -53,14 +57,14 @@ const tools: Tool[] = [
     declaration: {
       name: "get_available_slots",
       description:
-        "Get bookable times, already checked against clinic hours, existing bookings and the doctor's live calendar. Only offer times returned here. Dates are in the clinic's local timezone.",
+        "Get bookable times, already checked against clinic hours, existing bookings and the doctor's live calendar. `slots` is only a SAMPLE of the free times; `ranges` lists ALL free start times (every `intervalMinutes` within each range). Anything inside a range is free — confirm one specific time with check_time. Dates and times are in the clinic's local timezone.",
       parameters: {
         type: "object",
         properties: {
           serviceId: { type: "string", description: "Service id from list_services" },
           practitionerId: { type: "string", description: "Optional. Omit to search all practitioners." },
-          fromDate: { type: "string", description: "YYYY-MM-DD, default today" },
-          toDate: { type: "string", description: "YYYY-MM-DD, default two weeks after fromDate (max 21 days)" },
+          fromDate: { type: "string", description: "YYYY-MM-DD, default today. When the patient names a specific day, set fromDate AND toDate to that day." },
+          toDate: { type: "string", description: "YYYY-MM-DD, default two weeks after fromDate (max 21 days). Same as fromDate to look at a single day." },
           partOfDay: { type: "string", enum: ["morning", "afternoon", "evening"] },
           nearTime: { type: "string", description: "HH:MM (24h, clinic time). Return the free times closest to this time of day, e.g. 17:00 when the patient asks for 'around 5pm'." },
         },
@@ -104,7 +108,7 @@ const tools: Tool[] = [
             practitionerId: r.id,
             practitionerName: r.name,
             startAt: s.startAt,
-            local: local.toFormat("ccc dd LLL yyyy, HH:mm"),
+            local: local.toFormat("ccc dd LLL yyyy, h:mm a"),
             day: local.toISODate()!,
             ...(pricing && service ? { fee: formatRupees(quoteFee(pricing, tz, new Date(s.startAt), service).amountPaise) } : {}),
           });
@@ -116,10 +120,28 @@ const tools: Tool[] = [
       const singleDay = from.hasSame(to, "day");
       const cap = singleDay ? 8 : 4;
       const picked = groupByDay(found, tz)
-        .flatMap((day) => (args.nearTime ? nearestTo(day, tz, args.nearTime, cap) : spreadEvenly(day, cap)))
+        .flatMap((day) => (args.nearTime ? nearestSpaced(day, tz, args.nearTime, cap, Math.max(15, ctx.config.tenant.slotIntervalMinutes)) : spreadEvenly(day, cap)))
         .slice(0, 12)
         .map(({ day: _day, ...rest }) => rest);
-      return picked.length ? { slots: picked } : { slots: [], note: "No free times in that range. Offer to search other dates." };
+      const searched = { from: from.toISODate(), to: to.toISODate() };
+      if (picked.length === 0) {
+        // Say WHY a single day is empty, so the patient isn't told a closed day is "booked" (or the reverse).
+        const why = from.hasSame(to, "day") && service
+          ? practitioners.map((r) => {
+              const hours = booking.openingWindowFor(ctx.config, r.id, service, from.set({ hour: 12 }).toJSDate());
+              return hours.window ? `${r.name} works ${from.toFormat("cccc d LLL")} but has no free time left then` : `${r.name} isn't working on ${from.toFormat("cccc d LLL")}`;
+            }).join("; ")
+          : "";
+        return { searched, slots: [], note: `${why ? `${why}. ` : ""}No free times ${args.partOfDay ? `in the ${args.partOfDay} ` : ""}between ${searched.from} and ${searched.to}. Say so plainly and offer to search other dates (call get_available_slots again from the next day).` };
+      }
+      const { slotIntervalMinutes } = ctx.config.tenant;
+      return {
+        searched,
+        slots: picked,
+        ranges: freeRanges(found, tz, slotIntervalMinutes).slice(0, 40),
+        intervalMinutes: slotIntervalMinutes,
+        note: `slots is only a sample. ranges shows every free start time (every ${slotIntervalMinutes} minutes between "from" and "to"). A time inside a range is free even if it isn't in slots — don't tell the patient it is booked; check it with check_time.`,
+      };
     },
   },
   {
@@ -127,24 +149,24 @@ const tools: Tool[] = [
     declaration: {
       name: "book_appointment",
       description:
-        "Book an appointment for the verified patient. Call ONLY after the patient has explicitly confirmed the service, practitioner, time and the name for the booking. startAt must be copied exactly from get_available_slots. The phone number comes from the verified identity — never pass one.",
+        "Book an appointment for the verified patient. Call ONLY after the patient has explicitly confirmed the service, practitioner, time and the name for the booking. Give the time as `date` + `time` in the clinic's local time (preferred), never converted to UTC. If the time can't be booked you get the exact reason and the nearest free times. The phone number comes from the verified identity — never pass one.",
       parameters: {
         type: "object",
         properties: {
-          serviceId: { type: "string" },
-          practitionerId: { type: "string" },
-          startAt: { type: "string", description: "ISO timestamp exactly as returned by get_available_slots" },
+          serviceId: { type: "string", description: "From list_services. Optional when the clinic has only one service." },
+          practitionerId: { type: "string", description: "From list_practitioners. Optional when there is only one." },
+          ...whenParameters,
           patientName: { type: "string", description: "Name for this booking. Optional if the profile already has the patient's name." },
         },
-        required: ["serviceId", "practitionerId", "startAt"],
+        required: ["date", "time"],
       },
     },
     run: async (raw, ctx) => {
       const args = z
         .object({
-          serviceId: uuid,
-          practitionerId: uuid,
-          startAt: isoDateTime,
+          serviceId: z.string().optional(),
+          practitionerId: z.string().optional(),
+          ...whenFields,
           patientName: z.string().trim().min(2).max(100).optional(),
         })
         .parse(raw);
@@ -153,14 +175,15 @@ const tools: Tool[] = [
       const name = args.patientName ?? patient.name;
       if (!name) return { error: "Ask the patient for the name to book under." };
 
-      const start = new Date(args.startAt);
-      if (!(await slotIsFree(ctx, args.practitionerId, args.serviceId, start))) {
-        return { error: "That time is no longer available. Call get_available_slots again and offer fresh options." };
-      }
+      const ids = resolveIds(ctx, args);
+      if ("error" in ids) return ids;
+      const bookable = await checkBookable(ctx, ids.practitionerId, ids.serviceId, args);
+      if (!("start" in bookable)) return bookable.reply;
+      const start = bookable.start;
       try {
         const result = await booking.createAppointment(ctx.config, {
-          serviceId: args.serviceId,
-          resourceId: args.practitionerId,
+          serviceId: ids.serviceId,
+          resourceId: ids.practitionerId,
           startAt: start,
           patient: { name, phone: patient.phone },
           phoneVerified: true,
@@ -191,7 +214,7 @@ const tools: Tool[] = [
             : "CONFIRMED and blocked on the doctor's calendar.",
         };
       } catch (err) {
-        if (err instanceof SlotConflictError) return { error: "That time was just taken. Offer fresh options." };
+        if (err instanceof SlotConflictError) return { available: false, reason: "booked", error: "That time was just taken by someone else. Call get_available_slots and offer fresh options." };
         throw err;
       }
     },
@@ -345,25 +368,24 @@ const tools: Tool[] = [
     declaration: {
       name: "reschedule_appointment",
       description:
-        "Move one of the patient's appointments to a new time (same service and practitioner). newStartAt must be copied exactly from get_available_slots. Confirm with the patient first.",
+        "Move one of the patient's appointments to a new time (same service and practitioner). Give the new time as `date` + `time` in the clinic's local time. If it can't be booked you get the reason and the nearest free times. Confirm with the patient first.",
       parameters: {
         type: "object",
-        properties: { appointmentId: { type: "string" }, newStartAt: { type: "string" } },
-        required: ["appointmentId", "newStartAt"],
+        properties: { appointmentId: { type: "string" }, ...whenParameters },
+        required: ["appointmentId"],
       },
     },
     run: async (raw, ctx) => {
-      const args = z.object({ appointmentId: uuid, newStartAt: isoDateTime }).parse(raw);
+      const args = z.object({ appointmentId: uuid, ...whenFields }).parse(raw);
       if (!(await ownsAppointment(ctx, args.appointmentId))) return identityPhone(ctx) ? { error: "That appointment doesn't belong to this patient." } : NOT_VERIFIED;
       const current = await pool.query("SELECT service_id, resource_id FROM appointments WHERE id = $1 AND tenant_id = $2", [
         args.appointmentId,
         ctx.config.tenant.id,
       ]);
       if (current.rows.length === 0) return { error: "Appointment not found." };
-      const start = new Date(args.newStartAt);
-      if (!(await slotIsFree(ctx, current.rows[0].resource_id, current.rows[0].service_id, start))) {
-        return { error: "That time is not available. Call get_available_slots for the same service and practitioner and offer fresh options." };
-      }
+      const bookable = await checkBookable(ctx, current.rows[0].resource_id, current.rows[0].service_id, args);
+      if (!("start" in bookable)) return bookable.reply;
+      const start = bookable.start;
       try {
         const appt = await booking.rescheduleAppointment(ctx.config, args.appointmentId, start, "patient");
         return {
@@ -376,7 +398,7 @@ const tools: Tool[] = [
               : "Confirmed at the new time.",
         };
       } catch (err) {
-        if (err instanceof SlotConflictError) return { error: "That time was just taken. Offer fresh options." };
+        if (err instanceof SlotConflictError) return { available: false, reason: "booked", error: "That time was just taken by someone else. Call get_available_slots and offer fresh options." };
         throw err;
       }
     },
@@ -409,7 +431,7 @@ const tools: Tool[] = [
   },
 ];
 
-tools.push(...paymentTools);
+tools.push(...whenTools, ...paymentTools);
 
 export const toolDeclarations = tools.map((t) => t.declaration);
 const byName = new Map(tools.map((t) => [t.declaration.name, t]));

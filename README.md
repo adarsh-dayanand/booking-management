@@ -212,6 +212,14 @@ calendar syncs; sends reminders. Free-text WhatsApp messages only reach people w
 Re-apply `db/schema.sql` after pulling these changes (idempotent). It also merges the duplicate `patients` rows the old
 one-row-per-booking model created, by phone number.
 
+### How the agent handles times
+
+- **Clinic time, always.** The agent gives tools a `date` and a 24-hour `time` ("1:30 PM" → `13:30`), and the server converts it in the clinic's own time zone — the model never writes a UTC offset. An offset-less timestamp is read as clinic time.
+- **A calendar in the prompt.** The next 15 days are listed with their weekdays, so "next Tuesday" or "the 12th" is a lookup, not arithmetic. Times are read back as "Monday 5 October at 1:30 PM".
+- **It sees every free time, not a sample.** `get_available_slots` returns a few well-spread times plus the full free *ranges* and the interval; `check_time` answers "is 1:30 PM free?" for any specific time.
+- **"Unavailable" always has a reason.** `booked`, `outside_hours`, `closed_day`, `too_soon`, `past`, `too_close` (the clinic's buffer), or `not_on_interval` — each with the nearest free times, spaced apart so they're real choices.
+- **Resilient.** A transient model failure (empty reply, 429/5xx, timeout) is retried once before the patient sees an error.
+
 ## Connecting a real Google Calendar
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/), create a

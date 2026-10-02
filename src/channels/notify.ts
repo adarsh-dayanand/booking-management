@@ -101,7 +101,7 @@ async function loadContext(appointmentId: string): Promise<{
       serviceName: row.service_name,
       resourceName: row.resource_name,
       clinicName: row.clinic_name,
-      when: DateTime.fromJSDate(new Date(row.start_at), { zone: row.timezone }).toFormat("ccc dd LLL yyyy, HH:mm"),
+      when: DateTime.fromJSDate(new Date(row.start_at), { zone: row.timezone }).toFormat("ccc dd LLL yyyy, h:mm a"),
       reason: row.rejected_reason ?? row.cancel_reason,
     },
     phoneNumberId: row.whatsapp_phone_number_id,

@@ -110,7 +110,7 @@ async function resolveOption(options: ChatOption[], messageText: string): Promis
 }
 
 function formatSlotLabel(slot: Slot, timezone: string): string {
-  return DateTime.fromISO(slot.startAt, { zone: "utc" }).setZone(timezone).toFormat("ccc dd LLL, HH:mm");
+  return DateTime.fromISO(slot.startAt, { zone: "utc" }).setZone(timezone).toFormat("ccc dd LLL, h:mm a");
 }
 
 // ---------------------------------------------------------------------------

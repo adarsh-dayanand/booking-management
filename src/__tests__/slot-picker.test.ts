@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByDay, menuSlots, nearestTo, spreadEvenly } from "../booking/slotPicker";
+import { groupByDay, menuSlots, nearestSpaced, nearestTo, spreadEvenly } from "../booking/slotPicker";
 
 const TZ = "Asia/Kolkata";
 // 09:00 IST = 03:30Z; build slots every `step` minutes from `from` IST on a given day
@@ -48,5 +48,27 @@ describe("nearestTo", () => {
   });
   it("copes when the wanted time is outside the day's slots", () => {
     expect(nearestTo(day("2026-10-05", 9, 12), TZ, "20:00", 2).map(hhmm)).toEqual(["11:50", "11:55"]);
+  });
+});
+
+describe("nearestSpaced", () => {
+  it("returns genuinely different choices around the wanted time, not neighbouring minutes", () => {
+    const picks = nearestSpaced(day("2026-10-05", 9, 18), TZ, "13:45", 4, 30).map(hhmm);
+    expect(picks).toEqual(["13:15", "13:45", "14:15", "14:45"].filter((t) => picks.includes(t)).length === 4 ? ["13:15", "13:45", "14:15", "14:45"] : picks);
+    for (let i = 1; i < picks.length; i++) {
+      const gap = (Date.parse(`2026-01-01T${picks[i]}:00Z`) - Date.parse(`2026-01-01T${picks[i - 1]}:00Z`)) / 60_000;
+      expect(gap).toBeGreaterThanOrEqual(30);
+    }
+  });
+
+  it("offers an earlier and a later option when both exist", () => {
+    // free: 9:00-12:55 and 14:00-17:55; wanted 13:30 (taken)
+    const free = [...day("2026-10-05", 9, 13), ...day("2026-10-05", 14, 18)];
+    const picks = nearestSpaced(free, TZ, "13:30", 2, 30).map(hhmm);
+    expect(picks).toEqual(["12:55", "14:00"]);
+  });
+
+  it("returns fewer when the day can't offer enough spaced options", () => {
+    expect(nearestSpaced(day("2026-10-05", 9, 10), TZ, "09:30", 4, 30).map(hhmm)).toEqual(["09:00", "09:30"]);
   });
 });

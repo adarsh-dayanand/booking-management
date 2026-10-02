@@ -249,8 +249,8 @@ describe("consultant API: practitioners and availability", () => {
     expect(res.status).toBe(200);
     expect(res.body.timezone).toBe("Asia/Kolkata");
     expect(res.body.slots).toHaveLength(19); // 5-minute default: 09:00, 09:05 … 10:30 (a 30-minute visit must end by 11:00)
-    expect(res.body.slots[0].local).toContain("09:00");
-    expect(res.body.slots.at(-1).local).toContain("10:30");
+    expect(res.body.slots[0].local).toContain("9:00 AM");
+    expect(res.body.slots.at(-1).local).toContain("10:30 AM");
     expect((await call("GET", `/v1/consultant/slots?serviceId=nope&resourceId=${rid}&from=2031-01-01`, { token })).status).toBe(400);
   });
 });

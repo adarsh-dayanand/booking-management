@@ -32,6 +32,8 @@ export const config = {
     // fails (e.g. outside the 24h customer-service window) so reminders/approvals still get through.
     notifyTemplate: optional("WHATSAPP_NOTIFY_TEMPLATE"),
     notifyTemplateLang: process.env.WHATSAPP_NOTIFY_TEMPLATE_LANG || "en",
+    // Meta retires old Graph API versions after about two years; match the version shown in your Meta app's API Setup page.
+    graphVersion: process.env.WHATSAPP_GRAPH_VERSION || "v25.0",
   },
   // Prepended to 10-digit numbers typed without a country code (India by default).
   defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE || "91",

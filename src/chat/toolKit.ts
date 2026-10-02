@@ -70,6 +70,6 @@ export async function ownsAppointment(ctx: ToolContext, appointmentId: string): 
 
 export function label(iso: string | Date, tz: string): string {
   const dt = iso instanceof Date ? DateTime.fromJSDate(iso, { zone: tz }) : DateTime.fromISO(iso, { zone: "utc" }).setZone(tz);
-  return dt.toFormat("ccc dd LLL yyyy, HH:mm");
+  return dt.toFormat("ccc dd LLL yyyy, h:mm a"); // 12-hour: that is how patients say and read times
 }
 

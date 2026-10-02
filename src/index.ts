@@ -98,6 +98,12 @@ app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     res.status(err.statusCode).json({ error: err.message, correlationId: req.correlationId });
     return;
   }
+  // body-parser and friends flag the caller's mistakes (malformed JSON, oversized body) as 4xx: report those as such, not as a 500.
+  const status = (err as { status?: number; expose?: boolean })?.status;
+  if (typeof status === "number" && status >= 400 && status < 500 && (err as { expose?: boolean }).expose) {
+    res.status(status).json({ error: status === 400 ? "Malformed request body" : "Bad request", correlationId: req.correlationId });
+    return;
+  }
   console.error(`[error] [${req.correlationId}]`, err);
   res.status(500).json({ error: "Internal server error", correlationId: req.correlationId });
 });

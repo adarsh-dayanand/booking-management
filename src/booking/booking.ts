@@ -21,7 +21,7 @@ import type {
   TenantConfig,
 } from "../types";
 
-const DEFAULT_MIN_NOTICE_MINUTES = 30;
+export const DEFAULT_MIN_NOTICE_MINUTES = 30;
 
 function findService(config: TenantConfig, serviceId: string): Service {
   const service = config.services.find((s) => s.id === serviceId && s.active);
@@ -147,24 +147,28 @@ export async function generateAvailableSlots(
   const candidates = computeCandidateSlots(config, resourceId, service, rangeStart, rangeEnd, options);
   if (candidates.length === 0) return candidates;
 
+  // A candidate near the end of the range reaches `footprint` minutes past it, so look for busy time that far out too —
+  // otherwise a booking starting just after the window would be missed and its neighbour wrongly offered.
+  const footprintMinutes = service.durationMinutes + service.bufferMinutes;
+  const busyEnd = new Date(rangeEnd.getTime() + footprintMinutes * 60_000);
+
   const existing = await pool.query(
     `SELECT start_at, end_at FROM appointments
      WHERE tenant_id = $1 AND resource_id = $2 AND status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED')
        AND start_at < $4 AND end_at > $3`,
-    [config.tenant.id, resourceId, rangeStart, rangeEnd]
+    [config.tenant.id, resourceId, rangeStart, busyEnd]
   );
   const busyIntervals = existing.rows.map((r) => ({ start: new Date(r.start_at), end: new Date(r.end_at) }));
 
   if (resource.googleConnectionStatus === "connected") {
     try {
-      const calendarBusy = await googleCalendar.freeBusyQuery(resource, rangeStart, rangeEnd);
+      const calendarBusy = await googleCalendar.freeBusyQuery(resource, rangeStart, busyEnd);
       busyIntervals.push(...calendarBusy);
     } catch (err) {
       console.warn(`[booking] Google freebusy check failed for resource ${resource.id}, falling back to DB-only availability:`, err);
     }
   }
 
-  const footprintMinutes = service.durationMinutes + service.bufferMinutes;
   return candidates.filter((slot) => {
     const start = new Date(slot.startAt);
     const footprintEnd = new Date(start.getTime() + footprintMinutes * 60_000);

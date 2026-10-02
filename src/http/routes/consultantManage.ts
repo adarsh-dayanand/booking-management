@@ -194,7 +194,7 @@ consultantManageRouter.get("/slots", async (req, res, next) => {
     const tz = config.tenant.timezone;
     const from = DateTime.fromISO(q.from, { zone: tz }).startOf("day");
     const slots = await generateAvailableSlots(config, q.resourceId, q.serviceId, new Date(Math.max(from.toMillis(), Date.now())), from.plus({ days: q.days }).toJSDate());
-    res.json({ timezone: tz, slots: slots.map((s) => ({ ...s, local: DateTime.fromISO(s.startAt, { zone: "utc" }).setZone(tz).toFormat("ccc dd LLL, HH:mm") })) });
+    res.json({ timezone: tz, slots: slots.map((s) => ({ ...s, local: DateTime.fromISO(s.startAt, { zone: "utc" }).setZone(tz).toFormat("ccc dd LLL, h:mm a") })) });
   } catch (err) {
     next(fail(err));
   }

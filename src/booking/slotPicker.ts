@@ -29,6 +29,24 @@ export function nearestTo<T extends { startAt: string }>(daySlots: T[], tz: stri
     .sort((a, b) => a.startAt.localeCompare(b.startAt));
 }
 
+/**
+ * The free times nearest a wanted time, but spaced at least `minGapMinutes` apart — "2:00, 2:05, 2:10, 2:15" is one
+ * option repeated, not a choice. Returned in time order, so the patient sees earlier and later alternatives.
+ */
+export function nearestSpaced<T extends { startAt: string }>(daySlots: T[], tz: string, hhmm: string, count: number, minGapMinutes: number): T[] {
+  const [h, m] = hhmm.split(":").map(Number);
+  const target = h * 60 + m;
+  const byDistance = daySlots
+    .map((s) => ({ s, at: minuteOfDay(s.startAt, tz) }))
+    .sort((a, b) => Math.abs(a.at - target) - Math.abs(b.at - target));
+  const chosen: { s: T; at: number }[] = [];
+  for (const cand of byDistance) {
+    if (chosen.length >= count) break;
+    if (chosen.every((c) => Math.abs(c.at - cand.at) >= minGapMinutes)) chosen.push(cand);
+  }
+  return chosen.sort((a, b) => a.s.startAt.localeCompare(b.s.startAt)).map((c) => c.s);
+}
+
 /** Group slots (already sorted by time) by local calendar day. */
 export function groupByDay<T extends { startAt: string }>(slots: T[], tz: string): T[][] {
   const days = new Map<string, T[]>();

@@ -1,7 +1,7 @@
 import { DateTime } from "luxon";
 import { executeTool, isWriteTool, toolDeclarations, type AgentSession, type ToolContext } from "./agentTools";
 import { loadConversation, saveConversation, withConversationLock } from "./conversationStore";
-import { generate, generateStream, GeminiError, type GeminiContent } from "./gemini";
+import { generate, generateStream, GeminiError, type GeminiContent, type GeminiRequest } from "./gemini";
 import type { ChatResponse } from "./guidedFlow";
 import { getPatientByPhone, type Patient } from "../booking/patients";
 import { appendPaymentLink } from "../payments/offer";
@@ -56,19 +56,31 @@ export function buildSystemPrompt(config: TenantConfig, now: DateTime = DateTime
     tenant.confirmationPolicy === "instant"
       ? "BOOKING FLOW = direct booking. Times you can offer are free on the doctor's calendar. Once you book, the appointment is CONFIRMED immediately and the slot is blocked on the calendar."
       : "BOOKING FLOW = doctor approval. A booking is only a REQUEST until the doctor explicitly accepts it (the slot is held meanwhile). After booking, say it is awaiting the doctor's acceptance and that they will be messaged on WhatsApp when it is accepted or declined. Never say it is confirmed unless a tool reports status CONFIRMED.";
+  // A ready-made calendar, so weekday/date arithmetic ("next Tuesday", "the 12th") is a lookup, not a guess.
+  const calendar = Array.from({ length: 15 }, (_, i) => local.startOf("day").plus({ days: i }))
+    .map((d, i) => `${i === 0 ? "today" : i === 1 ? "tomorrow" : d.toFormat("cccc")} = ${d.toFormat("ccc d LLL")} (${d.toISODate()})`)
+    .join("; ");
   const payments = paymentActive(tenant)
     ? `\nPAYMENTS: this clinic collects the consultation fee online BEFORE a booking is confirmed. Slots from get_available_slots carry a fee; state it when you restate the details and ask for the patient's yes. After book_appointment returns status AWAITING_PAYMENT the booking is NOT confirmed: give the patient the amount and the paymentUrl from the tool result, say the time is held for ${appConfig.payments.holdMinutes} minutes, and that it is confirmed only once they pay (they will be told here and on WhatsApp). Never say "booked", "confirmed" or "requested" before payment is complete. If they say they've paid or ask about payment, call check_payment_status. An unpaid hold can't be rescheduled; cancel it and book again. Only ever share a payment link that a tool returned.\n`
     : "";
   return `You are the appointment assistant for ${tenant.name}, chatting with patients on WhatsApp or the clinic's website.
-Today is ${local.toFormat("cccc, dd LLLL yyyy, HH:mm")} (${tenant.timezone}). Resolve relative dates ("next Tuesday", "tomorrow evening") against this.
+Right now it is ${local.toFormat("cccc, d LLLL yyyy, h:mm a")} in the clinic (${tenant.timezone}).
 
 ${flow}
 ${payments}
+TIME — read carefully:
+- All times are the clinic's local time (${tenant.timezone}). Never convert to UTC or another zone, and never mention one. Give tools a date (YYYY-MM-DD) and a time (24-hour HH:MM).
+- Understand how people say times: "1:30 PM", "1.30pm", "half past one" → 13:30; "quarter to 5 in the evening" → 16:45; "noon" → 12:00; "morning" is before 12:00, "afternoon" 12:00–17:00, "evening" after 17:00. If am/pm is missing, take the reading that falls inside the clinic's hours; if both could, ask.
+- Dates: look them up here instead of calculating — ${calendar}. "Monday" means the next Monday on or after today unless they say "next week". If a date could mean two different days, confirm which.
+- When the patient names a day ("tomorrow", "Friday"), search exactly that day: fromDate = toDate. Report only what the tool returned for the days you searched, and say plainly when a day has nothing (closed, or full).
+- Read times back with the weekday, date and 12-hour time: "Monday 5 October at 1:30 PM".
+- get_available_slots shows only a SAMPLE of free times, plus the full ranges. When the patient names a specific time, call check_time — never decide a time is booked because it isn't in the sample. Say a time is unavailable only if a tool said so, then give its reason and offer its nearestFreeTimes. Never offer a time and call it unavailable in the same message.
+
 The patient: ${describePatient(who) || "unknown."}
 
 What you do: book, check, reschedule and cancel appointments, and answer basic clinic questions.
 Rules:
-- Use tools for every fact about services, practitioners, availability and appointments. Never invent times, ids or policies. Offer only times returned by get_available_slots, copying startAt exactly.
+- Use tools for every fact about services, practitioners, availability and appointments. Never invent times, ids or policies. Offer only times that get_available_slots or check_time showed to be free.
 - Before booking, cancelling or rescheduling, restate the details (service, practitioner, date/time, name) and get an explicit yes from the patient.
 - Collect only what is needed: service, practitioner (if more than one and the patient has a preference), time, and the name to book under. Don't re-ask anything listed under "The patient" below.
 - Identity is the phone number, and there is no registration. On WhatsApp the number is already verified. On web chat, before booking or touching any appointment, get their phone number, call send_phone_otp, then verify_phone_otp with the 6-digit code they receive on WhatsApp. If a tool result contains devCode, give that code to the tester.
@@ -107,6 +119,39 @@ interface TurnResult {
   wroteSomething: boolean;
 }
 
+const isTransient = (err: unknown): boolean =>
+  err instanceof GeminiError
+    ? /Empty model response|Model returned no text|\((429|500|502|503|504)\)/.test(err.message)
+    : err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError" || /fetch failed/.test(err.message));
+
+/**
+ * One model round-trip. Generation has no side effects (only tools do), so a transient failure — an empty reply, a
+ * 429/5xx, a timeout — is retried once rather than turning a good conversation into "I had trouble replying". Not retried
+ * once text has already streamed to the patient.
+ */
+async function modelStep(request: GeminiRequest, options: TurnOptions, step: number) {
+  for (let attempt = 0; ; attempt++) {
+    let streamed = false;
+    try {
+      const response = options.stream
+        ? await generateStream(request, (text) => ((streamed = true), options.onEvent?.({ type: "text_delta", step, text })))
+        : await generate(request);
+      const content = response.candidates?.[0]?.content;
+      if (!content?.parts?.length) {
+        throw new GeminiError(`Empty model response (${response.promptFeedback?.blockReason ?? response.candidates?.[0]?.finishReason ?? "unknown"})`);
+      }
+      const stepText = content.parts.filter((p) => !p.thought && p.text).map((p) => p.text).join("").trim();
+      const calls = content.parts.filter((p) => p.functionCall);
+      if (calls.length === 0 && !stepText) throw new GeminiError("Model returned no text");
+      return { content, stepText, calls };
+    } catch (err) {
+      if (attempt >= 1 || streamed || !isTransient(err)) throw err;
+      console.warn(`[agent] transient model failure, retrying once: ${err instanceof Error ? err.message : err}`);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+}
+
 /** Runs the Gemini tool-calling loop for one patient message. Throws GeminiError on model/transport failure. */
 export async function runTurn(
   config: TenantConfig,
@@ -127,22 +172,10 @@ export async function runTurn(
         tools: [{ functionDeclarations: toolDeclarations }],
         generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
       };
-      const response = options.stream
-        ? await generateStream(request, (text) => options.onEvent?.({ type: "text_delta", step, text }))
-        : await generate(request);
-      const content = response.candidates?.[0]?.content;
-      if (!content?.parts?.length) {
-        throw new GeminiError(`Empty model response (${response.promptFeedback?.blockReason ?? response.candidates?.[0]?.finishReason ?? "unknown"})`);
-      }
-
-      const stepText = content.parts.filter((p) => !p.thought && p.text).map((p) => p.text).join("").trim();
+      const { content, stepText, calls } = await modelStep(request, options, step);
       if (stepText) options.onEvent?.({ type: "model_text", step, text: stepText });
 
-      const calls = content.parts.filter((p) => p.functionCall);
-      if (calls.length === 0) {
-        if (!stepText) throw new GeminiError("Model returned no text");
-        return { text: stepText, wroteSomething };
-      }
+      if (calls.length === 0) return { text: stepText, wroteSomething };
 
       working.push(content); // verbatim, so thought signatures survive
       const results: GeminiContent["parts"] = [];

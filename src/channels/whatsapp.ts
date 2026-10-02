@@ -2,8 +2,6 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { config } from "../config";
 import type { ChatResponse } from "../chat/guidedFlow";
 
-const GRAPH_API_VERSION = "v20.0";
-
 /** Verifies Meta's X-Hub-Signature-256 header against the raw request body. */
 export function verifyWebhookSignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
   if (!config.whatsapp.appSecret) {
@@ -24,7 +22,7 @@ export async function sendTextMessage(phoneNumberId: string, to: string, text: s
 
 async function graphPost(phoneNumberId: string, payload: object): Promise<void> {
   if (!config.whatsapp.accessToken) throw new Error("WhatsApp is not configured (missing WHATSAPP_ACCESS_TOKEN)");
-  const response = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`, {
+  const response = await fetch(`https://graph.facebook.com/${config.whatsapp.graphVersion}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bearer ${config.whatsapp.accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ messaging_product: "whatsapp", ...payload }),
@@ -78,4 +76,30 @@ export async function deliver(phoneNumberId: string | null, to: string, text: st
 export function renderAsText(response: ChatResponse): string {
   if (!response.options?.length) return response.replyText;
   return `${response.replyText}\n\n${response.options.map((o) => o.label).join("\n")}`;
+}
+
+/** What Meta's most common delivery-failure codes mean in practice (https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes). */
+const ERROR_HINTS: Record<number, string> = {
+  131030: "the recipient isn't on the test number's allowed list: add and verify it under API Setup → Recipient",
+  131047: "outside the 24-hour window: free text is only allowed within 24h of the person's last message; use an approved template",
+  131026: "undeliverable: the number isn't on WhatsApp, or hasn't accepted WhatsApp's latest terms, or runs an unsupported WhatsApp version",
+  131049: "Meta chose not to deliver (its per-user marketing/engagement limits); common for test numbers: try again later or message the bot first",
+  131051: "unsupported message type",
+  131056: "too many messages to this person from this number too quickly",
+  130429: "throughput limit reached: slow down",
+  132000: "template parameter count doesn't match the approved template",
+  132001: "template doesn't exist (check its name and language)",
+  190: "the access token is invalid or has expired: generate a new one (test tokens last about 24 hours)",
+};
+
+/** A readable line for one delivery-status update from Meta's webhook, or null if it isn't worth logging. */
+export function describeStatus(status: any): string | null {
+  if (!status?.status) return null;
+  const to = status.recipient_id ? `+${status.recipient_id}` : "recipient";
+  const id = String(status.id ?? "").slice(-12);
+  if (status.status !== "failed") return `[whatsapp] message …${id} to ${to}: ${status.status}`;
+  const err = status.errors?.[0];
+  const code = err?.code as number | undefined;
+  const hint = code !== undefined ? ERROR_HINTS[code] : undefined;
+  return `[whatsapp] message …${id} to ${to} FAILED${code !== undefined ? ` (code ${code})` : ""}: ${err?.title ?? err?.message ?? "unknown error"}${err?.error_data?.details ? ` — ${err.error_data.details}` : ""}${hint ? `\n  → ${hint}` : ""}`;
 }

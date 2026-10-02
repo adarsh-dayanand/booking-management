@@ -85,7 +85,7 @@ export async function handleStaffMessage(config: TenantConfig, text: string): Pr
         if (result.rows.length === 0) return "No requests are waiting for you.";
         const lines = result.rows.map(
           (r) =>
-            `${appointmentRef(r.id)} — ${r.name}, ${r.service}, ${DateTime.fromJSDate(new Date(r.start_at), { zone: config.tenant.timezone }).toFormat("ccc dd LLL HH:mm")}`
+            `${appointmentRef(r.id)} — ${r.name}, ${r.service}, ${DateTime.fromJSDate(new Date(r.start_at), { zone: config.tenant.timezone }).toFormat("ccc dd LLL h:mm a")}`
         );
         return `Waiting for you:\n${lines.join("\n")}\n\nReply APPROVE <ref> or REJECT <ref> <reason>.`;
       }
