@@ -17,7 +17,7 @@ let tenantId: string;
 let serviceId: string;
 let resourceId: string;
 
-// Far-future Monday, 09:00-17:00 IST. The service is 30 min with a 10-minute buffer; slots every 30 minutes.
+// Far-future Monday, 09:00-17:00 IST. The service is 30 min with a 10-minute buffer; so a start every 40 minutes.
 const MON = "2031-01-06";
 const at = (hhmm: string) => new Date(`${MON}T${hhmm}:00+05:30`);
 
@@ -27,7 +27,7 @@ beforeAll(async () => {
   booking = await import("../booking/booking");
   ({ loadTenantConfig } = await import("../booking/tenant"));
   slug = `guided-${randomUUID().slice(0, 8)}`;
-  tenantId = (await pool.query(`INSERT INTO tenants (name, slug, timezone, confirmation_policy, slot_interval_minutes) VALUES ('Guided Clinic', $1, 'Asia/Kolkata', 'instant', 30) RETURNING id`, [slug])).rows[0].id;
+  tenantId = (await pool.query(`INSERT INTO tenants (name, slug, timezone, confirmation_policy) VALUES ('Guided Clinic', $1, 'Asia/Kolkata', 'instant') RETURNING id`, [slug])).rows[0].id;
   serviceId = (await pool.query(`INSERT INTO services (tenant_id, name, duration_minutes, buffer_minutes) VALUES ($1, 'Consult', 30, 10) RETURNING id`, [tenantId])).rows[0].id;
   resourceId = (await pool.query(`INSERT INTO resources (tenant_id, name) VALUES ($1, 'Dr. G') RETURNING id`, [tenantId])).rows[0].id;
   await pool.query(`INSERT INTO availability_rules (tenant_id, resource_id, weekday, start_time, end_time) VALUES ($1, $2, 1, '09:00', '17:00')`, [tenantId, resourceId]);
@@ -88,7 +88,7 @@ describe("the numbered chat flow re-checks before booking", () => {
     const session = randomUUID();
     await say(session, "hi");
     const slots = await say(session, "1");
-    const second = slots.options![1];
+    const second = slots.options![3];
     await say(session, second.id);
     await say(session, "Buffer Person");
     await say(session, "9100000004");

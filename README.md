@@ -125,13 +125,17 @@ Both apps use the same light theme as the marketing website (Geist, green accent
 
 While working on the UI, run the API (`npm run dev`) and `npm run dev:web` side by side; Vite serves the apps on http://localhost:5173/consultant/ and /admin/ and proxies `/v1` to the API (set `API_URL` if the API isn't on port 4000). The old `/consultant.html` redirects to `/consultant/`.
 
-**Consultant dashboard** — Overview (today / next 7 days / needs approval / users / revenue, plus a first-run setup checklist), Appointments (filter, search, approve, reject or cancel with a reason, **reschedule to any date and time with a date-time picker** that warns about working hours and blocks overlaps, CSV export), Users (search, history), Services, Practitioners (working hours, holidays, Google Calendar connect), Payments (fees and transactions), Settings (booking flow, timezone, **time slot interval**, WhatsApp, reminders, FAQ, password).
+**Consultant dashboard** — Overview (today / next 7 days / needs approval / users / revenue, plus a first-run setup checklist), Appointments (filter, search, approve, reject or cancel with a reason, **reschedule to any date and time with a date-time picker** that warns about working hours and blocks overlaps, CSV export), Users (search, history), Services, Practitioners (working hours, holidays, Google Calendar connect), Payments (fees and transactions), Settings (booking flow, timezone, WhatsApp, reminders, FAQ, password).
 
 **Admin console** — platform overview, list and onboard consultants (with their first login), edit a consultant, manage its logins, and set up its Razorpay payments (credentials, enable/disable, webhook URL to register).
 
-### Time slot interval
+### Add to calendar
 
-How often a start time is offered is a per-consultant setting (**Settings → Scheduling**, or `slotIntervalMinutes` in `PUT /v1/consultant/settings`): **5 minutes by default**, any value from 5 to 240. With 5, a day offers 9:00, 9:05, 9:10…; with 30, 9:00, 9:30… The chat assistant shows a handful of well-spread times per day and can search near a time ("around 5pm"); the dashboard's reschedule picker steps by the same interval.
+Confirmation, approval, reschedule and reminder messages to users, and new-booking alerts to the doctor, include two links: a Google Calendar link and an iPhone / other link (a signed `.ics` file at `BASE_URL/v1/public/calendar/<token>.ics`, so set `BASE_URL` to your public address). The link is signed with `JWT_SECRET`, always shows the booking's current time, carries no phone number or notes, and stops working once the booking is cancelled or rejected. Re-adding after a reschedule updates the same calendar event. Bookings still awaiting the doctor get no link for the user until approved.
+
+### Start times
+
+There is no clinic-wide interval: each service sets its own start times from its duration and buffer. Starting at opening time, a 30-minute service with a 10-minute buffer is offered at 9:00, 9:40, 10:20…, and a visit also blocks its own buffer so neighbours never collide. The chat assistant shows a handful of well-spread times per day and can search near a time ("around 5pm"); the dashboard's reschedule picker is free-form (5-minute steps) and warns when a time is off the service's usual start times.
 
 ## 6. Run tests
 

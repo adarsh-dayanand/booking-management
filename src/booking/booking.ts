@@ -47,6 +47,9 @@ export interface GenerateSlotsOptions {
   excludeAppointmentId?: string;
 }
 
+/** Start times for a service follow from the service itself: back to back, each visit plus its own turnover buffer. */
+export const slotStepMinutes = (service: Service): number => service.durationMinutes + service.bufferMinutes;
+
 /**
  * Pure candidate-slot generator: hours + service duration only, no DB or
  * calendar lookups. Kept separate so timezone/hours logic is unit-testable
@@ -63,9 +66,7 @@ export function computeCandidateSlots(
   const tz = config.tenant.timezone;
   const now = options.now ?? new Date();
   const minNotice = options.minNoticeMinutes ?? DEFAULT_MIN_NOTICE_MINUTES;
-  // Start times are offered every `slotIntervalMinutes` (the consultant's setting); a visit's own length only decides
-  // whether it fits before closing and whether it collides with another booking.
-  const granularity = options.slotGranularityMinutes ?? config.tenant.slotIntervalMinutes ?? service.durationMinutes + service.bufferMinutes;
+  const granularity = options.slotGranularityMinutes ?? slotStepMinutes(service);
   const earliestAllowed = DateTime.fromJSDate(now, { zone: tz }).plus({ minutes: minNotice });
 
   const rules = config.availabilityRules.filter((r) => r.resourceId === resourceId);
@@ -134,15 +135,16 @@ function ruleOn(config: TenantConfig, resourceId: string, local: DateTime) {
 }
 
 /**
- * Whether `start` is one of the start times the clinic offers that day: opening time plus a whole number of slot
- * intervals. (Offers are anchored at opening time, so 09:15 opening with 30-minute slots gives 09:15, 09:45…)
+ * Whether `start` is one of the start times offered for `service` that day: opening time plus a whole number of the
+ * service's own steps (duration + buffer). Offers are anchored at opening time, so a 09:15 opening with a 30-minute
+ * step gives 09:15, 09:45…
  */
-export function onSlotGrid(config: TenantConfig, resourceId: string, start: Date): boolean {
+export function onSlotGrid(config: TenantConfig, resourceId: string, service: Service, start: Date): boolean {
   const local = DateTime.fromJSDate(start, { zone: config.tenant.timezone });
   const rule = ruleOn(config, resourceId, local);
   if (!rule) return true; // no opening hours that day, so there is no grid to be off
   const open = Number(rule.startTime!.slice(0, 2)) * 60 + Number(rule.startTime!.slice(3, 5));
-  return (local.hour * 60 + local.minute - open) % config.tenant.slotIntervalMinutes === 0;
+  return (local.hour * 60 + local.minute - open) % slotStepMinutes(service) === 0;
 }
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {

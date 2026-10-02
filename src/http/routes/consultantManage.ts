@@ -4,7 +4,7 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { pool } from "../../lib/db";
 import { NotFoundError, ValidationError } from "../../errors";
-import { generateAvailableSlots, onSlotGrid, openingWindowFor } from "../../booking/booking";
+import { generateAvailableSlots, onSlotGrid, openingWindowFor, slotStepMinutes } from "../../booking/booking";
 import { loadTenantConfigById } from "../../booking/tenant";
 
 // What a consultant (clinic) manages for itself from the dashboard: services, practitioners and their hours,
@@ -237,7 +237,8 @@ consultantManageRouter.get("/slots/check", async (req, res, next) => {
       conflicts: overlapping.map(view),
       // not an overlap, but inside a clinic gap (the buffer after the previous visit, or before the next): a warning, never a block
       tight: tight.map(view),
-      onGrid: onSlotGrid(config, q.resourceId, start),
+      onGrid: onSlotGrid(config, q.resourceId, service, start),
+      serviceStepMinutes: slotStepMinutes(service), // start times for this service come every this many minutes from opening
       serviceBufferMinutes: service.bufferMinutes, // the checked service's own turnover time (how much gap a visit of this service needs after it)
     });
   } catch (err) {

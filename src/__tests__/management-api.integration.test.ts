@@ -248,7 +248,7 @@ describe("consultant API: practitioners and availability", () => {
     const res = await call("GET", `/v1/consultant/slots?serviceId=${sid}&resourceId=${rid}&from=${monday.toISODate()}&days=1`, { token });
     expect(res.status).toBe(200);
     expect(res.body.timezone).toBe("Asia/Kolkata");
-    expect(res.body.slots).toHaveLength(19); // 5-minute default: 09:00, 09:05 … 10:30 (a 30-minute visit must end by 11:00)
+    expect(res.body.slots).toHaveLength(4); // a start every 30 minutes (the service's length, no buffer): 09:00, 09:30, 10:00, 10:30 — a 30-minute visit must end by 11:00
     expect(res.body.slots[0].local).toContain("9:00 AM");
     expect(res.body.slots.at(-1).local).toContain("10:30 AM");
     expect((await call("GET", `/v1/consultant/slots?serviceId=nope&resourceId=${rid}&from=2031-01-01`, { token })).status).toBe(400);
@@ -304,7 +304,7 @@ describe("consultant API: overview, payments history, account, settings", () => 
   });
 });
 
-describe("slot interval and availability check", () => {
+describe("slot starts and availability check", () => {
   async function clinicWithHours() {
     const o = await onboard();
     const sid = (await call("POST", "/v1/consultant/services", { token: o.token, body: { name: "Consult", durationMinutes: 30, bufferMinutes: 5 } })).body.service.id;
@@ -319,23 +319,19 @@ describe("slot interval and availability check", () => {
     return d.toISODate()!;
   };
 
-  it("new consultants start at a 5-minute interval, and it can be changed (5-240 only)", async () => {
+  it("there is no clinic-wide slot interval: settings don't carry one and reject it", async () => {
     const { token } = await onboard();
-    expect((await call("GET", "/v1/consultant/settings", { token })).body.settings.slotIntervalMinutes).toBe(5);
-    expect((await call("PUT", "/v1/consultant/settings", { token, body: { slotIntervalMinutes: 15 } })).body.settings.slotIntervalMinutes).toBe(15);
-    expect((await call("PUT", "/v1/consultant/settings", { token, body: { slotIntervalMinutes: 4 } })).status).toBe(400);
-    expect((await call("PUT", "/v1/consultant/settings", { token, body: { slotIntervalMinutes: 241 } })).status).toBe(400);
-    expect((await call("PUT", "/v1/consultant/settings", { token, body: { slotIntervalMinutes: 7.5 } })).status).toBe(400);
+    expect((await call("GET", "/v1/consultant/settings", { token })).body.settings).not.toHaveProperty("slotIntervalMinutes");
+    expect((await call("PUT", "/v1/consultant/settings", { token, body: { slotIntervalMinutes: 15 } })).status).toBe(400);
   });
 
-  it("the offered start times follow the interval", async () => {
+  it("the offered start times follow the service's duration + buffer", async () => {
     const { token, sid, rid } = await clinicWithHours();
     const monday = await nextMonday();
-    const count = async () => (await call("GET", `/v1/consultant/slots?serviceId=${sid}&resourceId=${rid}&from=${monday}&days=1`, { token })).body.slots.length;
-    // 09:00–17:00 with a 30-minute visit: last start 16:30 → 7.5h of 5-minute starts = 91 starts
-    expect(await count()).toBe(91);
-    await call("PUT", "/v1/consultant/settings", { token, body: { slotIntervalMinutes: 30 } });
-    expect(await count()).toBe(16);
+    const slots = (await call("GET", `/v1/consultant/slots?serviceId=${sid}&resourceId=${rid}&from=${monday}&days=1`, { token })).body.slots;
+    // 09:00–17:00, 30-minute visit + 5-minute buffer = a start every 35 minutes; the last that still finishes by 17:00 is 16:00 (09:00 + 12 × 35)
+    expect(slots).toHaveLength(13);
+    expect(new Date(slots[1].startAt).getTime() - new Date(slots[0].startAt).getTime()).toBe(35 * 60_000);
   });
 
   it("checks a time: free, outside hours, in the past, and overlapping another booking (but not itself)", async () => {
@@ -343,7 +339,7 @@ describe("slot interval and availability check", () => {
     const monday = await nextMonday();
     const check = async (time: string, extra = "") => (await call("GET", `/v1/consultant/slots/check?serviceId=${sid}&resourceId=${rid}&startAt=${encodeURIComponent(`${monday}T${time}:00+05:30`)}${extra}`, { token })).body;
 
-    expect(await check("10:00")).toMatchObject({ withinHours: true, inPast: false, conflicts: [], tight: [], onGrid: true, hours: { start: "09:00", end: "17:00" } });
+    expect(await check("09:35")).toMatchObject({ withinHours: true, inPast: false, conflicts: [], tight: [], onGrid: true, serviceStepMinutes: 35, hours: { start: "09:00", end: "17:00" } });
     expect(await check("08:30")).toMatchObject({ withinHours: false });
     expect(await check("16:45")).toMatchObject({ withinHours: false }); // 30 min visit would end 17:15
     expect(await check("16:30")).toMatchObject({ withinHours: true });

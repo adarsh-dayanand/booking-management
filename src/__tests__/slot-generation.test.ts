@@ -13,7 +13,7 @@ function buildConfig(timezone: string, rules: AvailabilityRule[]): TenantConfig 
       whatsappPhoneNumberId: null,
       staffWhatsappNumber: null,
       reminderHoursBefore: 24,
-      faqText: null, slotIntervalMinutes: 30, paymentsEnabled: false, collectPayments: false, pricing: null,
+      faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null,
     },
     services: [],
     resources: [],
@@ -96,30 +96,24 @@ describe("computeCandidateSlots", () => {
     expect(slots).toEqual([{ startAt: "2026-11-02T14:00:00.000Z", endAt: "2026-11-02T14:30:00.000Z" }]);
   });
 
-  describe("slot interval (the consultant's setting)", () => {
-    const withInterval = (minutes: number) => {
-      const config = buildConfig("Asia/Kolkata", [rule({ weekday: 1, startTime: "09:00", endTime: "10:00" })]);
-      config.tenant.slotIntervalMinutes = minutes;
-      return computeCandidateSlots(config, "res1", service, MONDAY_START, MONDAY_END, { minNoticeMinutes: 0, now: FAR_PAST_NOW });
-    };
+  describe("start times follow the service (duration + buffer)", () => {
+    const hours = [rule({ weekday: 1, startTime: "09:00", endTime: "10:00" })];
     const localTimes = (slots: { startAt: string }[]) => slots.map((s) => new Date(new Date(s.startAt).getTime() + 330 * 60_000).toISOString().slice(11, 16));
+    const starts = (svc: Service, options = {}) =>
+      localTimes(computeCandidateSlots(buildConfig("Asia/Kolkata", hours), "res1", svc, MONDAY_START, MONDAY_END, { minNoticeMinutes: 0, now: FAR_PAST_NOW, ...options }));
 
-    it("offers a start every 5 minutes, as long as the visit still fits before closing", () => {
-      // 30-minute visit, closing at 10:00: the last start is 09:30
-      expect(localTimes(withInterval(5))).toEqual(["09:00", "09:05", "09:10", "09:15", "09:20", "09:25", "09:30"]);
+    it("steps by the visit length when there is no buffer, as long as the visit still fits before closing", () => {
+      expect(starts(service)).toEqual(["09:00", "09:30"]);
+      expect(starts({ ...service, durationMinutes: 15 })).toEqual(["09:00", "09:15", "09:30", "09:45"]);
     });
 
-    it("follows whatever interval the consultant chose", () => {
-      expect(localTimes(withInterval(15))).toEqual(["09:00", "09:15", "09:30"]);
-      expect(localTimes(withInterval(20))).toEqual(["09:00", "09:20"]);
-      expect(localTimes(withInterval(60))).toEqual(["09:00"]);
+    it("steps by the visit plus its own buffer", () => {
+      expect(starts({ ...service, durationMinutes: 20, bufferMinutes: 10 })).toEqual(["09:00", "09:30"]);
+      expect(starts({ ...service, durationMinutes: 15, bufferMinutes: 5 })).toEqual(["09:00", "09:20", "09:40"]);
     });
 
-    it("an explicit option still overrides the tenant setting", () => {
-      const config = buildConfig("Asia/Kolkata", [rule({ weekday: 1, startTime: "09:00", endTime: "10:00" })]);
-      config.tenant.slotIntervalMinutes = 5;
-      const slots = computeCandidateSlots(config, "res1", service, MONDAY_START, MONDAY_END, { minNoticeMinutes: 0, now: FAR_PAST_NOW, slotGranularityMinutes: 30 });
-      expect(slots).toHaveLength(2);
+    it("an explicit option still overrides the step", () => {
+      expect(starts(service, { slotGranularityMinutes: 10 })).toEqual(["09:00", "09:10", "09:20", "09:30"]);
     });
   });
 });

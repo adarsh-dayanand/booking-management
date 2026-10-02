@@ -12,6 +12,7 @@ import { adminRouter } from "./http/routes/admin";
 import { razorpayWebhookRouter } from "./http/routes/razorpayWebhook";
 import { googleAuthRouter } from "./http/routes/googleAuth";
 import { startScheduler } from "./jobs/scheduler";
+import { calendarLinkRouter } from "./http/routes/calendarLink";
 import { webChatRouter } from "./http/routes/webChat";
 import { whatsappWebhookRouter } from "./http/routes/whatsappWebhook";
 
@@ -85,6 +86,7 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+app.use("/v1/public/calendar", calendarLinkRouter);
 app.use("/v1/public", webChatRouter);
 app.use("/v1/consultant", consultantRouter);
 app.use("/v1/admin", adminRouter);

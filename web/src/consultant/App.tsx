@@ -25,7 +25,7 @@ const NAV = [
   { id: "settings", label: "Settings" },
 ];
 
-const toClinic = (s: Settings): Clinic => ({ name: s.name, timezone: s.timezone, slotIntervalMinutes: s.slotIntervalMinutes });
+const toClinic = (s: Settings): Clinic => ({ name: s.name, timezone: s.timezone });
 
 export function App() {
   const [token, setToken] = useState<string | null>(() => tokens.get());

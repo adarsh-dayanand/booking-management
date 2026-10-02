@@ -236,10 +236,9 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 CREATE INDEX IF NOT EXISTS payments_tenant_idx ON payments (tenant_id, status);
 
--- How often a bookable start time is offered (minutes). The consultant sets it in Settings; 5 means 9:00, 9:05, 9:10...
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slot_interval_minutes int NOT NULL DEFAULT 5;
+-- Start times come from each service's own duration + buffer; there is no clinic-wide slot interval any more.
 ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_slot_interval_check;
-ALTER TABLE tenants ADD CONSTRAINT tenants_slot_interval_check CHECK (slot_interval_minutes BETWEEN 5 AND 240);
+ALTER TABLE tenants DROP COLUMN IF EXISTS slot_interval_minutes;
 
 -- ---------------------------------------------------------------------------
 -- WhatsApp Embedded Signup: a consultant connects their OWN WhatsApp Business number.

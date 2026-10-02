@@ -59,7 +59,6 @@ export interface Settings {
   confirmationPolicy: "instant" | "staff_approval";
   staffWhatsappNumber: string | null;
   reminderHoursBefore: number;
-  slotIntervalMinutes: number;
   faqText: string | null;
   whatsappPhoneNumberId: string | null;
 }

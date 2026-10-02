@@ -1,6 +1,6 @@
-// Property-style test against the real database. For many combinations of slot interval, service durations and
+// Property-style test against the real database. For many combinations of service durations and
 // buffers, it keeps booking whatever the system offers and, after every booking, checks the rules that must always hold:
-//   • every offered start is on the clinic's interval grid and inside working hours
+//   • every offered start is on the service's own grid (duration + buffer from opening) and inside working hours
 //   • no offered slot overlaps an existing visit, and every visit keeps ITS buffer free (after it) and the new visit's
 //     own buffer fits before the next one — i.e. buffers are symmetric
 //   • "is this time free?" (diagnoseTime) agrees exactly with "is this time offered?" (generateAvailableSlots)
@@ -41,7 +41,7 @@ beforeAll(async () => {
   booking = await import("../booking/booking");
   ({ diagnoseTime } = await import("../booking/availability"));
   ({ loadTenantConfigById } = await import("../booking/tenant"));
-  tenantId = (await pool.query(`INSERT INTO tenants (name, slug, timezone, confirmation_policy, slot_interval_minutes) VALUES ('Consistency', $1, 'Asia/Kolkata', 'instant', 5) RETURNING id`, [`cons-${randomUUID()}`])).rows[0].id;
+  tenantId = (await pool.query(`INSERT INTO tenants (name, slug, timezone, confirmation_policy) VALUES ('Consistency', $1, 'Asia/Kolkata', 'instant') RETURNING id`, [`cons-${randomUUID()}`])).rows[0].id;
   resourceId = (await pool.query(`INSERT INTO resources (tenant_id, name) VALUES ($1, 'Dr. C') RETURNING id`, [tenantId])).rows[0].id;
   await pool.query(`INSERT INTO availability_rules (tenant_id, resource_id, weekday, start_time, end_time) VALUES ($1, $2, 1, '09:15', '17:00')`, [tenantId, resourceId]);
   for (const [duration, buffer] of [[15, 0], [30, 5], [45, 15], [60, 10]]) {
@@ -66,16 +66,17 @@ const liveVisits = async () =>
 const offered = async (service: (typeof services)[number]) =>
   (await booking.generateAvailableSlots(await loadTenantConfigById(tenantId), resourceId, service.id, new Date(at(0)), new Date(at(24 * 60 - 1)), { now: LONG_BEFORE })).map((s) => minuteOfDay(s.startAt));
 
-async function checkInvariants(interval: number, label: string) {
+async function checkInvariants(label: string) {
   const visits = await liveVisits();
   const config = await loadTenantConfigById(tenantId);
   for (const service of services) {
     const starts = await offered(service);
     const where = `${label}, service ${service.duration}+${service.buffer}`;
+    const step = service.duration + service.buffer;
     for (const t of starts) {
       const end = t + service.duration;
       expect(t >= OPEN && end <= CLOSE, `${where}: ${hhmm(t)} is outside working hours`).toBe(true);
-      expect((t - OPEN) % interval, `${where}: ${hhmm(t)} is off the ${interval}-minute grid`).toBe(0);
+      expect((t - OPEN) % step, `${where}: ${hhmm(t)} is off the ${step}-minute grid`).toBe(0);
       for (const v of visits) {
         expect(t < v.end && v.start < end, `${where}: ${hhmm(t)} overlaps the visit at ${hhmm(v.start)}-${hhmm(v.end)}`).toBe(false);
         // each visit reserves its length + ITS buffer; the new visit needs its own buffer free before the next one starts
@@ -94,13 +95,12 @@ async function checkInvariants(interval: number, label: string) {
   }
 }
 
-describe("slot offers stay consistent across intervals, services and buffers", () => {
-  for (const interval of [5, 10, 15, 20, 30, 45, 60]) {
-    it(`interval ${interval} min: random bookings of mixed services never collide or break a buffer`, async () => {
+describe("slot offers stay consistent across services and buffers", () => {
+  for (const seed of [1, 2, 3, 4, 5, 6, 7]) {
+    it(`seed ${seed}: random bookings of mixed services never collide or break a buffer`, async () => {
       await pool.query("DELETE FROM appointments WHERE tenant_id = $1", [tenantId]);
-      await pool.query("UPDATE tenants SET slot_interval_minutes = $2 WHERE id = $1", [tenantId, interval]);
-      const rand = rng(interval * 7919);
-      await checkInvariants(interval, `interval ${interval}, empty day`);
+      const rand = rng(seed * 7919);
+      await checkInvariants(`seed ${seed}, empty day`);
 
       for (let i = 0; i < 5; i++) {
         const service = services[Math.floor(rand() * services.length)];
@@ -112,7 +112,7 @@ describe("slot offers stay consistent across intervals, services and buffers", (
         await booking.createAppointment(config, {
           serviceId: service.id, resourceId, startAt: new Date(at(pick)), patient: { name: `P${i}`, phone: `+9190000${String(i).padStart(5, "0")}` }, channel: "web",
         });
-        await checkInvariants(interval, `interval ${interval}, after booking ${i + 1} (${service.duration}+${service.buffer} at ${hhmm(pick)})`);
+        await checkInvariants(`seed ${seed}, after booking ${i + 1} (${service.duration}+${service.buffer} at ${hhmm(pick)})`);
       }
     }, 120_000);
   }

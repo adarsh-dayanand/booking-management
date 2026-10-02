@@ -126,7 +126,6 @@ function settingsView(t: any) {
     confirmationPolicy: t.confirmation_policy,
     staffWhatsappNumber: t.staff_whatsapp_number,
     reminderHoursBefore: t.reminder_hours_before,
-    slotIntervalMinutes: t.slot_interval_minutes,
     faqText: t.faq_text,
     whatsappPhoneNumberId: t.whatsapp_phone_number_id,
   };
@@ -148,7 +147,6 @@ const settingsSchema = z
     confirmationPolicy: z.enum(["instant", "staff_approval"]),
     staffWhatsappNumber: z.string().nullable().transform((v) => (v ? digitsOnly(v) : null)).refine((v) => v === null || (v.length >= 8 && v.length <= 15), "staffWhatsappNumber must be 8-15 digits including country code"),
     reminderHoursBefore: z.number().int().min(0).max(168),
-    slotIntervalMinutes: z.number().int().min(5, "slot interval must be at least 5 minutes").max(240),
     faqText: z.string().max(4000).nullable(),
   })
   .partial()
@@ -163,7 +161,6 @@ consultantRouter.put("/settings", async (req, res, next) => {
       confirmationPolicy: "confirmation_policy",
       staffWhatsappNumber: "staff_whatsapp_number",
       reminderHoursBefore: "reminder_hours_before",
-      slotIntervalMinutes: "slot_interval_minutes",
       faqText: "faq_text",
     };
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);

@@ -7,7 +7,7 @@ import { runEmbeddedSignup } from "./facebook";
 import { mockApi } from "../test-utils";
 import type { WhatsAppInfo } from "./types";
 
-const SETTINGS = { name: "Demo Clinic", timezone: "Asia/Kolkata", confirmationPolicy: "staff_approval", staffWhatsappNumber: null, reminderHoursBefore: 24, slotIntervalMinutes: 5, faqText: null, whatsappPhoneNumberId: null };
+const SETTINGS = { name: "Demo Clinic", timezone: "Asia/Kolkata", confirmationPolicy: "staff_approval", staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, whatsappPhoneNumberId: null };
 const NONE = { mode: "none", phoneNumberId: null, displayPhone: null, verifiedName: null, connectedAt: null, quality: null, template: null } as const;
 const OWN = { mode: "own", phoneNumberId: "1440736872449106", displayPhone: "+91 98765 43210", verifiedName: "Sunrise Dental", connectedAt: "2030-01-01T00:00:00Z", quality: "GREEN", template: { name: "booking_update", status: "APPROVED" } } as const;
 const info = (connection: WhatsAppInfo["connection"], available = true): WhatsAppInfo => ({ signup: { available, appId: available ? "1111" : null, configId: available ? "2222" : null, graphVersion: "v25.0" }, connection });

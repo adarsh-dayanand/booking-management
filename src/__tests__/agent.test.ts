@@ -16,7 +16,7 @@ import type { TenantConfig } from "../types";
 const config = (policy: "instant" | "staff_approval"): TenantConfig => ({
   tenant: {
     id: "t1", name: "Demo Clinic", slug: "demo", timezone: "Asia/Kolkata", confirmationPolicy: policy,
-    whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: "Open Mon-Fri 9-5.", slotIntervalMinutes: 5, paymentsEnabled: false, collectPayments: false, pricing: null,
+    whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: "Open Mon-Fri 9-5.", paymentsEnabled: false, collectPayments: false, pricing: null,
   },
   services: [], resources: [], availabilityRules: [],
 });

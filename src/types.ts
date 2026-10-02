@@ -15,7 +15,6 @@ export interface Tenant {
   reminderHoursBefore: number;
   faqText: string | null;
   /** Minutes between offered start times (5 → 9:00, 9:05, 9:10…). Set by the consultant. */
-  slotIntervalMinutes: number;
   /** Set by the admin (with Razorpay credentials). Without it the consultant can't collect payments at all. */
   paymentsEnabled: boolean;
   /** The consultant's own switch: when true (and paymentsEnabled), bookings must be paid before they are confirmed. */

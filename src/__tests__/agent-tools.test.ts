@@ -43,7 +43,7 @@ const RESOURCE = "33333333-3333-4333-8333-333333333333";
 
 const ctx = (channel: "web" | "whatsapp", externalId: string, session: AgentSession = {}): ToolContext => ({
   config: {
-    tenant: { id: "t1", name: "C", slug: "c", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, slotIntervalMinutes: 5, paymentsEnabled: false, collectPayments: false, pricing: null },
+    tenant: { id: "t1", name: "C", slug: "c", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null },
     services: [{ id: SERVICE, tenantId: "t1", name: "Consult", durationMinutes: 30, bufferMinutes: 0, active: true }],
     resources: [{ id: RESOURCE, tenantId: "t1", name: "Doc", googleCalendarId: null, googleRefreshTokenEncrypted: null, googleConnectionStatus: "disconnected" as const, active: true }],
     availabilityRules: [],
@@ -259,7 +259,7 @@ describe("offering times when slots are 5 minutes apart", () => {
     config: {
       ...base.config,
       tenant: { ...base.config.tenant, timezone: "Asia/Kolkata" },
-      services: [{ id: SERVICE, tenantId: "t1", name: "Consult", durationMinutes: 30, bufferMinutes: 0, active: true }],
+      services: [{ id: SERVICE, tenantId: "t1", name: "Quick", durationMinutes: 5, bufferMinutes: 0, active: true }], // starts every 5 minutes
       resources: [{ id: RESOURCE, tenantId: "t1", name: "Doc", googleCalendarId: null, googleRefreshTokenEncrypted: null, googleConnectionStatus: "disconnected" as const, active: true }],
     },
   };
@@ -388,7 +388,8 @@ describe("check_time: answering 'is 1:30 PM free?' without guessing from a sampl
 
 describe("get_available_slots shows the whole picture, not just a sample", () => {
   const base = ctx("whatsapp", "919876543210");
-  const config = { ...base.config, tenant: { ...base.config.tenant, timezone: "Asia/Kolkata", slotIntervalMinutes: 5 } };
+  // a 5-minute service, so its start times come every 5 minutes (the mocked slots below)
+  const config = { ...base.config, tenant: { ...base.config.tenant, timezone: "Asia/Kolkata" }, services: [{ id: SERVICE, tenantId: "t1", name: "Quick", durationMinutes: 5, bufferMinutes: 0, active: true }] };
   const slot = (iso: string) => ({ startAt: new Date(iso).toISOString(), endAt: new Date(Date.parse(iso) + 30 * 60_000).toISOString() });
   const every5 = (from: string, count: number) => Array.from({ length: count }, (_, i) => slot(new Date(Date.parse(from) + i * 5 * 60_000).toISOString()));
   const args = { serviceId: SERVICE, fromDate: "2099-01-07", toDate: "2099-01-07" };
@@ -414,12 +415,14 @@ describe("get_available_slots shows the whole picture, not just a sample", () =>
     expect(r.ranges.map((x: any) => `${x.firstStart}-${x.lastStart}`)).toEqual(["9:00 AM-9:15 AM", "10:00 AM-10:10 AM"]);
   });
 
-  it("uses the clinic's interval when merging", async () => {
+  it("merges ranges by the service's own step (duration + buffer)", async () => {
     const slots = [0, 20, 40, 60].map((m) => slot(new Date(Date.parse("2099-01-07T09:00:00+05:30") + m * 60_000).toISOString()));
     generateAvailableSlots.mockResolvedValue(slots);
-    const r: any = await executeTool("get_available_slots", args, { ...base, config: { ...config, tenant: { ...config.tenant, slotIntervalMinutes: 20 } } });
+    const svc = { id: SERVICE, tenantId: "t1", name: "Consult", durationMinutes: 15, bufferMinutes: 5, active: true };
+    const r: any = await executeTool("get_available_slots", args, { ...base, config: { ...config, services: [svc] } });
     expect(r.ranges).toHaveLength(1);
     expect(r.ranges[0]).toMatchObject({ firstStart: "9:00 AM", lastStart: "10:00 AM" });
+    expect(r.intervalMinutes).toBe(20);
   });
 });
 

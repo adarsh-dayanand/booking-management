@@ -1,6 +1,6 @@
 import { DateTime } from "luxon";
 import { pool } from "../lib/db";
-import { DEFAULT_MIN_NOTICE_MINUTES, generateAvailableSlots, onSlotGrid, openingWindowFor } from "./booking";
+import { DEFAULT_MIN_NOTICE_MINUTES, generateAvailableSlots, onSlotGrid, openingWindowFor, slotStepMinutes } from "./booking";
 import { nearestSpaced } from "./slotPicker";
 import type { Slot, TenantConfig } from "../types";
 
@@ -86,8 +86,8 @@ export async function diagnoseTime(
   }
 
   // Free and in hours, but not one of the times the clinic offers.
-  if (!onSlotGrid(config, resourceId, start)) {
-    return no("not_on_interval", `${resource.name} takes bookings every ${config.tenant.slotIntervalMinutes} minutes starting at ${clockHHMM(hours.window.start)}, so ${clock(start, tz)} isn't one of the start times.`);
+  if (!onSlotGrid(config, resourceId, service, start)) {
+    return no("not_on_interval", `${resource.name} books ${service.name} every ${slotStepMinutes(service)} minutes starting at ${clockHHMM(hours.window.start)}, so ${clock(start, tz)} isn't one of the start times.`);
   }
   return no("busy", `${resource.name}'s calendar shows ${when} as busy.`);
 }

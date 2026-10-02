@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as booking from "../booking/booking";
 import { identityPatient, identityPhone, isoDate, label, NOT_VERIFIED, ownsAppointment, uuid, type AgentSession, type Tool, type ToolContext, type ToolResult } from "./toolKit";
 import { paymentTools } from "./paymentTools";
+import { calendarLinks } from "../calendar/addToCalendar";
 import { freeRanges, resolveIds, resolveWhen, unavailableReply, whenFields, whenParameters, whenTools } from "./whenTools";
 import { diagnoseTime } from "../booking/availability";
 import { paymentActive, quoteFee, formatRupees } from "../payments/pricing";
@@ -98,6 +99,7 @@ const tools: Tool[] = [
       const rangeStart = new Date(Math.max(from.toMillis(), Date.now()));
       const pricing = paymentActive(ctx.config.tenant) ? ctx.config.tenant.pricing : null;
       const service = ctx.config.services.find((sv) => sv.id === args.serviceId);
+      const step = service ? booking.slotStepMinutes(service) : 15; // start times follow the service: its length plus its gap
       const found: { practitionerId: string; practitionerName: string; startAt: string; local: string; day: string; fee?: string }[] = [];
       for (const r of practitioners) {
         const slots = await booking.generateAvailableSlots(ctx.config, r.id, args.serviceId, rangeStart, to.toJSDate());
@@ -116,11 +118,11 @@ const tools: Tool[] = [
       }
       found.sort((a, b) => a.startAt.localeCompare(b.startAt));
 
-      // Times can be offered as often as every 5 minutes, so show a few well-spread (or nearest-to-requested) ones per day.
+      // Show a few well-spread (or nearest-to-requested) ones per day.
       const singleDay = from.hasSame(to, "day");
       const cap = singleDay ? 8 : 4;
       const picked = groupByDay(found, tz)
-        .flatMap((day) => (args.nearTime ? nearestSpaced(day, tz, args.nearTime, cap, Math.max(15, ctx.config.tenant.slotIntervalMinutes)) : spreadEvenly(day, cap)))
+        .flatMap((day) => (args.nearTime ? nearestSpaced(day, tz, args.nearTime, cap, Math.max(15, step)) : spreadEvenly(day, cap)))
         .slice(0, 12)
         .map(({ day: _day, ...rest }) => rest);
       const searched = { from: from.toISODate(), to: to.toISODate() };
@@ -134,13 +136,12 @@ const tools: Tool[] = [
           : "";
         return { searched, slots: [], note: `${why ? `${why}. ` : ""}No free times ${args.partOfDay ? `in the ${args.partOfDay} ` : ""}between ${searched.from} and ${searched.to}. Say so plainly and offer to search other dates (call get_available_slots again from the next day).` };
       }
-      const { slotIntervalMinutes } = ctx.config.tenant;
       return {
         searched,
         slots: picked,
-        ranges: freeRanges(found, tz, slotIntervalMinutes).slice(0, 40),
-        intervalMinutes: slotIntervalMinutes,
-        note: `slots is only a sample. ranges shows every free START time (every ${slotIntervalMinutes} minutes from firstStart to lastStart); lastStart is when the last visit begins, NOT the closing time (call get_opening_hours for that). A time inside a range is free even if it isn't in slots — don't tell the patient it is booked; check it with check_time.`,
+        ranges: freeRanges(found, tz, step).slice(0, 40),
+        intervalMinutes: step,
+        note: `slots is only a sample. ranges shows every free START time (every ${step} minutes from firstStart to lastStart); lastStart is when the last visit begins, NOT the closing time (call get_opening_hours for that). A time inside a range is free even if it isn't in slots — don't tell the patient it is booked; check it with check_time.`,
       };
     },
   },
@@ -204,14 +205,21 @@ const tools: Tool[] = [
           };
         }
         const pending = result.status === "PENDING_CONFIRMATION";
+        const bookedService = ctx.config.services.find((sv) => sv.id === ids.serviceId);
+        const addToCalendar = pending ? undefined : calendarLinks({
+          appointmentId: result.appointmentId, version: 0, startAt: start, endAt: new Date(start.getTime() + (bookedService?.durationMinutes ?? 30) * 60_000), status: result.status,
+          title: `${bookedService?.name ?? "Appointment"} with ${ctx.config.resources.find((r) => r.id === ids.practitionerId)?.name ?? "the clinic"}`,
+          clinicName: ctx.config.tenant.name, details: `Appointment at ${ctx.config.tenant.name}. Ref: ${result.appointmentId.slice(0, 6)}`,
+        });
         return {
           appointmentId: result.appointmentId,
           reference: result.appointmentId.slice(0, 6),
           status: result.status,
           when: label(start, ctx.config.tenant.timezone),
+          ...(addToCalendar ? { addToCalendar } : {}),
           meaning: pending
             ? "REQUEST ONLY: the slot is held but the doctor must explicitly accept. Tell the patient they'll be messaged on WhatsApp once the doctor accepts or declines."
-            : "CONFIRMED and blocked on the doctor's calendar.",
+            : `CONFIRMED and blocked on the doctor's calendar.${addToCalendar ? " Give the patient both addToCalendar links (google, and ics for iPhone/other) so they can add it to their phone calendar." : ""}`,
         };
       } catch (err) {
         if (err instanceof SlotConflictError) return { available: false, reason: "booked", error: "That time was just taken by someone else. Call get_available_slots and offer fresh options." };

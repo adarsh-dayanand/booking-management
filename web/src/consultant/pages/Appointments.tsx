@@ -56,6 +56,7 @@ interface SlotCheck {
   withinHours: boolean;
   onGrid: boolean;
   serviceBufferMinutes: number;
+  serviceStepMinutes: number;
   hours: { start: string; end: string } | null;
   conflicts: Neighbour[];
   tight: Neighbour[];
@@ -110,7 +111,7 @@ function RescheduleModal({ appointment, onClose, onDone }: { appointment: Appoin
         : `Right before ${t.patientName ?? "another"}'s visit (${clockOf(t.startAt)}); this service keeps a ${c.serviceBufferMinutes}-minute gap after each visit. You can still book it.` });
     }
     if (!notes.some((n) => n.kind === "warn")) notes.unshift({ kind: "ok", text: "Free — inside working hours." });
-    if (c.onGrid === false) notes.push({ kind: "info", text: `Not one of the usual start times (every ${clinic.slotIntervalMinutes} minutes from opening), so users can't book this time themselves. You can.` });
+    if (c.onGrid === false) notes.push({ kind: "info", text: `Not one of the usual start times for this service (every ${c.serviceStepMinutes} minutes from opening), so users can't book this time themselves. You can.` });
   }
 
   return (
@@ -119,11 +120,11 @@ function RescheduleModal({ appointment, onClose, onDone }: { appointment: Appoin
         {appointment.patient_name} · {appointment.service_name} with {appointment.resource_name}<br />
         Currently {formatInZone(appointment.start_at, tz)}
       </p>
-      <DateTimePicker value={value} onChange={setValue} minDate={localStringIn(new Date(), tz).slice(0, 10)} stepMinutes={clinic.slotIntervalMinutes} />
+      <DateTimePicker value={value} onChange={setValue} minDate={localStringIn(new Date(), tz).slice(0, 10)} stepMinutes={5} />
       {notes.map((n) => <div key={n.text} className={`avail avail-${n.kind === "info" ? "wait" : n.kind}`} role="status">{n.text}</div>)}
       <Alert>{error}</Alert>
       <p className="muted small" style={{ marginTop: 12 }}>
-        Times are in {tz}, every {clinic.slotIntervalMinutes} minutes (change this in Settings). The user is told about the new time.
+        Times are in {tz}. The user is told about the new time.
       </p>
       <div className="form-foot">
         <Button onClick={confirm} disabled={blocked || busy}>{unchanged ? "Move appointment" : `Move to ${formatInZone(startUtc, tz, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true })}`}</Button>

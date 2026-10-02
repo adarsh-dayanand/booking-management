@@ -5,10 +5,9 @@ import { formatDate, formatWhen } from "../shared/format";
 export interface Clinic {
   name: string;
   timezone: string;
-  slotIntervalMinutes: number;
 }
 
-export const DEFAULT_CLINIC: Clinic = { name: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, slotIntervalMinutes: 5 };
+export const DEFAULT_CLINIC: Clinic = { name: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 export const ClinicContext = createContext<Clinic>(DEFAULT_CLINIC);
 
 /** Formatters bound to the clinic's time zone, so every page shows the same times the clinic works in. */

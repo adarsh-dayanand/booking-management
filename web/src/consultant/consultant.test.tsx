@@ -17,7 +17,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const SETTINGS = { name: "Demo Clinic", timezone: "Asia/Kolkata", confirmationPolicy: "staff_approval", staffWhatsappNumber: null, reminderHoursBefore: 24, slotIntervalMinutes: 5, faqText: null, whatsappPhoneNumberId: null };
+const SETTINGS = { name: "Demo Clinic", timezone: "Asia/Kolkata", confirmationPolicy: "staff_approval", staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, whatsappPhoneNumberId: null };
 const OVERVIEW: Overview = {
   timezone: "Asia/Kolkata", paymentsActive: true, today: 3, next7Days: 12, pendingApproval: 2, awaitingPayment: 1, syncFailed: 0, users: 40, newUsers30d: 6,
   revenue: { todayPaise: 150000, last30DaysPaise: 2500000, paidCount30d: 17 },
@@ -177,7 +177,7 @@ describe("appointments", () => {
 
   describe("reschedule with the date-time picker", () => {
     // a1 starts 2031-01-01T10:00:00Z = Wed 1 Jan 15:30 in the clinic's zone (Asia/Kolkata)
-    const CHECK_OK = { startAt: "", endAt: "", inPast: false, withinHours: true, onGrid: true, serviceBufferMinutes: 5, hours: { start: "09:00", end: "17:00" }, conflicts: [], tight: [] };
+    const CHECK_OK = { startAt: "", endAt: "", inPast: false, withinHours: true, onGrid: true, serviceBufferMinutes: 5, serviceStepMinutes: 35, hours: { start: "09:00", end: "17:00" }, conflicts: [], tight: [] };
     const openModal = async (check: unknown, extra: Record<string, unknown> = {}) => {
       const api = open("appointments/all", {
         "GET /v1/consultant/appointments": { appointments: [list[0]] },
@@ -256,7 +256,7 @@ describe("appointments", () => {
     it("mentions when a time isn't one of the usual start times, but still allows it", async () => {
       const { dialog } = await openModal({ ...CHECK_OK, onGrid: false });
       await pickDay(dialog);
-      expect(await within(dialog).findByText(/Not one of the usual start times \(every 5 minutes from opening\)/)).toBeInTheDocument();
+      expect(await within(dialog).findByText(/Not one of the usual start times for this service \(every 35 minutes from opening\)/)).toBeInTheDocument();
       expect(within(dialog).getByText("Free — inside working hours.")).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: /^Move to/ })).toBeEnabled();
     });
@@ -276,16 +276,15 @@ describe("appointments", () => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
 
-    it("offers minutes at the consultant's slot interval", async () => {
+    it("lets the consultant pick any 5-minute time", async () => {
       tokens.set("jwt");
       window.location.hash = "#/appointments/all";
-      mockApi({ "GET /v1/consultant/settings": { settings: { ...SETTINGS, slotIntervalMinutes: 15 } }, "GET /v1/consultant/appointments": { appointments: [list[0]] } });
+      mockApi({ "GET /v1/consultant/settings": { settings: SETTINGS }, "GET /v1/consultant/appointments": { appointments: [list[0]] } });
       render(<App />);
       await screen.findByText("Pending Pat");
-      await waitFor(() => expect(screen.getByText("Demo Clinic")).toBeInTheDocument()); // settings (and so the interval) have loaded
       await userEvent.click(screen.getByRole("button", { name: "Reschedule" }));
       const minutes = within(await screen.findByRole("dialog")).getByRole("combobox", { name: "Minute" });
-      expect(Array.from(minutes.querySelectorAll("option")).map((o) => o.textContent)).toEqual(["00", "15", "30", "45"]);
+      expect(Array.from(minutes.querySelectorAll("option"))).toHaveLength(12);
     });
   });
 
@@ -511,37 +510,14 @@ describe("settings", () => {
   });
 });
 
-describe("slot interval setting", () => {
-  const save = async (api: ReturnType<typeof open>) => {
+describe("settings no longer have a slot interval", () => {
+  it("doesn't show one, and doesn't send one when saving", async () => {
+    const api = open("settings", { "PUT /v1/consultant/settings": { settings: SETTINGS } });
+    expect(await screen.findByRole("button", { name: "Save settings" })).toBeInTheDocument();
+    expect(screen.queryByText(/slot interval/i)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Save settings" }));
     await waitFor(() => expect(api.find("PUT", "/v1/consultant/settings")).toHaveLength(1));
-    return api.find("PUT", "/v1/consultant/settings")[0].body;
-  };
-
-  it("defaults to 5 minutes and saves a preset", async () => {
-    const api = open("settings", { "PUT /v1/consultant/settings": { settings: { ...SETTINGS, slotIntervalMinutes: 15 } } });
-    const select = await screen.findByRole("combobox", { name: /Time slot interval/ });
-    expect(select).toHaveValue("5");
-    await userEvent.selectOptions(select, "15");
-    expect((await save(api)).slotIntervalMinutes).toBe(15);
-  });
-
-  it("accepts a custom number of minutes", async () => {
-    const api = open("settings", { "PUT /v1/consultant/settings": { settings: { ...SETTINGS, slotIntervalMinutes: 25 } } });
-    await userEvent.selectOptions(await screen.findByRole("combobox", { name: /Time slot interval/ }), "custom");
-    const custom = screen.getByLabelText(/Custom interval/);
-    await userEvent.clear(custom);
-    await userEvent.type(custom, "25");
-    expect((await save(api)).slotIntervalMinutes).toBe(25);
-  });
-
-  it("shows a saved non-preset interval as custom", async () => {
-    tokens.set("jwt");
-    window.location.hash = "#/settings";
-    mockApi({ "GET /v1/consultant/settings": { settings: { ...SETTINGS, slotIntervalMinutes: 25 } } });
-    render(<App />);
-    expect(await screen.findByRole("combobox", { name: /Time slot interval/ })).toHaveValue("custom");
-    expect(screen.getByLabelText(/Custom interval/)).toHaveValue(25);
+    expect(api.find("PUT", "/v1/consultant/settings")[0].body).not.toHaveProperty("slotIntervalMinutes");
   });
 });
 

@@ -1,6 +1,7 @@
 import { DateTime } from "luxon";
 import { pool } from "../lib/db";
 import * as whatsapp from "./whatsapp";
+import { calendarLinks } from "../calendar/addToCalendar";
 
 export type AppointmentEvent = "created" | "paid" | "payment_expired" | "approved" | "rejected" | "cancelled" | "rescheduled" | "reminder";
 /** Who caused the event. The actor is never messaged about their own action. */
@@ -17,7 +18,12 @@ export interface NotifyContext {
   clinicName: string;
   when: string;
   reason?: string | null;
+  /** "Add to calendar" links (Google, and an .ics for Apple/others); present once there is a real or tentative booking. */
+  calendar?: { google: string; ics: string };
 }
+
+const addToCalendar = (c: NotifyContext): string =>
+  c.calendar ? `\n\nAdd to your calendar:\nGoogle: ${c.calendar.google}\niPhone / other: ${c.calendar.ics}` : "";
 
 export function appointmentRef(appointmentId: string): string {
   return appointmentId.slice(0, 6);
@@ -31,15 +37,15 @@ export function patientMessage(event: AppointmentEvent, actor: Actor, c: NotifyC
       if (c.channel === "whatsapp") return null; // the agent's own reply already told them
       return pending
         ? `Hi ${c.patientName}, we've received your appointment request at ${c.clinicName}. The doctor will confirm it shortly.\n${detail}`
-        : `Hi ${c.patientName}, your appointment at ${c.clinicName} is confirmed.\n${detail}`;
+        : `Hi ${c.patientName}, your appointment at ${c.clinicName} is confirmed.\n${detail}${addToCalendar(c)}`;
     case "paid":
       return pending
         ? `Payment received, ${c.patientName}. Thank you! Your request at ${c.clinicName} is now with the doctor, who will confirm it shortly.\n${detail}`
-        : `Payment received, ${c.patientName}. Thank you! Your appointment at ${c.clinicName} is confirmed.\n${detail}`;
+        : `Payment received, ${c.patientName}. Thank you! Your appointment at ${c.clinicName} is confirmed.\n${detail}${addToCalendar(c)}`;
     case "payment_expired":
       return `Hi ${c.patientName}, we didn't receive the payment for your appointment at ${c.clinicName} in time, so the time slot has been released.\nMessage us here whenever you'd like to book again.\n${detail}`;
     case "approved":
-      return `Good news ${c.patientName}: the doctor has confirmed your appointment at ${c.clinicName}.\n${detail}`;
+      return `Good news ${c.patientName}: the doctor has confirmed your appointment at ${c.clinicName}.\n${detail}${addToCalendar(c)}`;
     case "rejected":
       return `Sorry ${c.patientName}, the doctor couldn't accept your appointment request at ${c.clinicName}.${c.reason ? ` Reason: ${c.reason}.` : ""}\nYou're welcome to message us here to pick another time.\n${detail}`;
     case "cancelled":
@@ -47,9 +53,9 @@ export function patientMessage(event: AppointmentEvent, actor: Actor, c: NotifyC
       return `Hi ${c.patientName}, your appointment at ${c.clinicName} has been cancelled by the clinic.${c.reason ? ` Reason: ${c.reason}.` : ""}\nMessage us here to book another time.\n${detail}`;
     case "rescheduled":
       if (actor === "patient") return null;
-      return `Hi ${c.patientName}, your appointment at ${c.clinicName} has been moved to a new time.${pending ? " It's awaiting the doctor's confirmation." : ""}\n${detail}\nReply here if that doesn't work for you.`;
+      return `Hi ${c.patientName}, your appointment at ${c.clinicName} has been moved to a new time.${pending ? " It's awaiting the doctor's confirmation." : ""}\n${detail}${pending ? "" : addToCalendar(c)}\nReply here if that doesn't work for you.`;
     case "reminder":
-      return `Reminder: ${c.patientName}, you have an appointment at ${c.clinicName}.\n${detail}\nReply here to reschedule or cancel.`;
+      return `Reminder: ${c.patientName}, you have an appointment at ${c.clinicName}.\n${detail}${addToCalendar(c)}\nReply here to reschedule or cancel.`;
   }
 }
 
@@ -57,14 +63,15 @@ export function staffMessage(event: AppointmentEvent, actor: Actor, c: NotifyCon
   if (actor !== "patient") return null; // staff/calendar changes were made by the doctor's side already
   const detail = `${c.patientName} (${c.patientPhone})\n${c.serviceName} with ${c.resourceName}\n${c.when}\nRef: ${c.ref}`;
   const pending = c.status === "PENDING_CONFIRMATION";
+  const cal = addToCalendar(c);
   const decide = `\nReply APPROVE ${c.ref} to accept or REJECT ${c.ref} <reason> to decline.`;
   switch (event) {
     case "created":
-      return pending ? `New appointment request:\n${detail}${decide}` : `New booking (auto-confirmed):\n${detail}`;
+      return pending ? `New appointment request:\n${detail}${cal}${decide}` : `New booking (auto-confirmed):\n${detail}${cal}`;
     case "paid":
-      return pending ? `New appointment request (already paid):\n${detail}${decide}` : `New booking (paid, auto-confirmed):\n${detail}`;
+      return pending ? `New appointment request (already paid):\n${detail}${cal}${decide}` : `New booking (paid, auto-confirmed):\n${detail}${cal}`;
     case "rescheduled":
-      return pending ? `Patient moved their appointment — needs your acceptance again:\n${detail}${decide}` : `Patient rescheduled:\n${detail}`;
+      return pending ? `Patient moved their appointment — needs your acceptance again:\n${detail}${cal}${decide}` : `Patient rescheduled:\n${detail}${cal}`;
     case "cancelled":
       return `Patient cancelled:\n${detail}${c.reason ? `\nReason: ${c.reason}` : ""}`;
     default:
@@ -78,7 +85,7 @@ async function loadContext(appointmentId: string): Promise<{
   staffNumber: string | null;
 } | null> {
   const result = await pool.query(
-    `SELECT a.id, a.status, a.channel, a.start_at, a.cancel_reason, a.rejected_reason,
+    `SELECT a.id, a.version, a.status, a.channel, a.start_at, a.end_at, a.cancel_reason, a.rejected_reason,
             COALESCE(a.patient_name, p.name) AS patient_name, p.phone AS patient_phone, s.name AS service_name, r.name AS resource_name,
             t.name AS clinic_name, t.timezone, t.whatsapp_phone_number_id, t.staff_whatsapp_number
      FROM appointments a
@@ -103,6 +110,11 @@ async function loadContext(appointmentId: string): Promise<{
       clinicName: row.clinic_name,
       when: DateTime.fromJSDate(new Date(row.start_at), { zone: row.timezone }).toFormat("ccc dd LLL yyyy, h:mm a"),
       reason: row.rejected_reason ?? row.cancel_reason,
+      calendar: calendarLinks({
+        appointmentId: row.id, version: row.version, startAt: new Date(row.start_at), endAt: new Date(row.end_at), status: row.status,
+        title: `${row.service_name} with ${row.resource_name}`, clinicName: row.clinic_name,
+        details: `Appointment at ${row.clinic_name}. Ref: ${appointmentRef(row.id)}`,
+      }),
     },
     phoneNumberId: row.whatsapp_phone_number_id,
     staffNumber: row.staff_whatsapp_number,

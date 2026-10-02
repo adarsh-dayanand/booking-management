@@ -54,7 +54,7 @@ function fakeRazorpay(url: string, init: RequestInit = {}): Response {
 const buildConfig = (over: Partial<TenantConfig["tenant"]> = {}): TenantConfig => ({
   tenant: {
     id: tenantId, name: "Pay Clinic", slug: "pay-clinic", timezone: "Asia/Kolkata", confirmationPolicy: "staff_approval",
-    whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, slotIntervalMinutes: 5,
+    whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null,
     paymentsEnabled: true, collectPayments: true, pricing: { mode: "flat", hourlyRate: 1000 }, ...over,
   },
   services: [{ id: serviceId, tenantId, name: "Consult", durationMinutes: 30, bufferMinutes: 0, active: true }],

@@ -123,6 +123,14 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
         },
       },
     },
+    "/v1/public/calendar/{token}.ics": {
+      get: {
+        tags: ["agent"], summary: "Add-to-calendar file",
+        description: "The calendar (.ics) file behind the \"add to calendar\" link sent to users and doctors. `token` is `<appointmentId>.<signature>`, signed by the server, so links can't be forged. Always shows the booking's current time; 410 once it is cancelled or rejected. Contains no phone number or notes.",
+        parameters: [{ name: "token", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "text/calendar", content: { "text/calendar": { schema: { type: "string" } } } }, 404: { description: "Unknown or forged link" }, 410: { description: "The appointment is no longer active" } },
+      },
+    },
     "/v1/public/{tenantSlug}/chat/sessions/{sessionId}": {
       delete: {
         tags: ["agent"],
@@ -294,7 +302,7 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           { name: "startAt", in: "query", required: true, schema: { type: "string", format: "date-time" }, example: "2026-10-06T14:35:00+05:30" },
           { name: "excludeAppointmentId", in: "query", schema: { type: "string", format: "uuid" } },
         ],
-        responses: { 200: json({ type: "object", properties: { startAt: { type: "string" }, endAt: { type: "string" }, inPast: { type: "boolean" }, withinHours: { type: "boolean" }, onGrid: { type: "boolean", description: "Is this one of the start times users are offered (opening time + whole slot intervals)?" }, serviceBufferMinutes: { type: "integer" }, tight: { type: "array", description: "Visits closer than a clinic buffer gap (not overlapping): advisory only.", items: { type: "object" } }, hours: { type: "object", nullable: true, properties: { start: { type: "string" }, end: { type: "string" } } }, conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, patientName: { type: "string", nullable: true }, startAt: { type: "string" }, endAt: { type: "string" } } } } } }), 400: errorResponse("Bad input"), 404: errorResponse("Unknown service or practitioner") },
+        responses: { 200: json({ type: "object", properties: { startAt: { type: "string" }, endAt: { type: "string" }, inPast: { type: "boolean" }, withinHours: { type: "boolean" }, onGrid: { type: "boolean", description: "Is this one of the start times users are offered (opening time + whole steps of the service's duration + buffer)?" }, serviceBufferMinutes: { type: "integer" }, serviceStepMinutes: { type: "integer", description: "Minutes between start times for this service (duration + buffer)." }, tight: { type: "array", description: "Visits closer than a clinic buffer gap (not overlapping): advisory only.", items: { type: "object" } }, hours: { type: "object", nullable: true, properties: { start: { type: "string" }, end: { type: "string" } } }, conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, patientName: { type: "string", nullable: true }, startAt: { type: "string" }, endAt: { type: "string" } } } } } }), 400: errorResponse("Bad input"), 404: errorResponse("Unknown service or practitioner") },
       },
     },
     "/v1/consultant/whatsapp": {
@@ -506,7 +514,6 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           confirmationPolicy: { type: "string", enum: ["instant", "staff_approval"], description: "instant = direct booking; staff_approval = doctor must accept." },
           staffWhatsappNumber: { type: "string", nullable: true, description: "Digits with country code. Gets approval requests and may send APPROVE/REJECT commands." },
           reminderHoursBefore: { type: "integer", description: "0 disables reminders." },
-          slotIntervalMinutes: { type: "integer", minimum: 5, maximum: 240, default: 5, description: "Minutes between offered start times (5 → 9:00, 9:05, 9:10…; 30 → 9:00, 9:30…). Also the step in the dashboard's reschedule time picker." },
           faqText: { type: "string", nullable: true, description: "Clinic info the agent may answer questions from." },
           whatsappPhoneNumberId: { type: "string", nullable: true, description: "Read-only here. Connect a number on the WhatsApp page." },
         },
@@ -517,7 +524,6 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           confirmationPolicy: { type: "string", enum: ["instant", "staff_approval"] },
           staffWhatsappNumber: { type: "string", nullable: true, example: "+91 98765 43210" },
           reminderHoursBefore: { type: "integer", minimum: 0, maximum: 168 },
-          slotIntervalMinutes: { type: "integer", minimum: 5, maximum: 240 },
           faqText: { type: "string", nullable: true, maxLength: 4000 },
           // whatsappPhoneNumberId is intentionally absent: consultants connect a number on the WhatsApp page (or the admin sets one);
           // sending it here is rejected.
