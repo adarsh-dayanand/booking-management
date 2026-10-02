@@ -343,7 +343,7 @@ describe("slot interval and availability check", () => {
     const monday = await nextMonday();
     const check = async (time: string, extra = "") => (await call("GET", `/v1/consultant/slots/check?serviceId=${sid}&resourceId=${rid}&startAt=${encodeURIComponent(`${monday}T${time}:00+05:30`)}${extra}`, { token })).body;
 
-    expect(await check("10:00")).toMatchObject({ withinHours: true, inPast: false, conflicts: [], hours: { start: "09:00", end: "17:00" } });
+    expect(await check("10:00")).toMatchObject({ withinHours: true, inPast: false, conflicts: [], tight: [], onGrid: true, hours: { start: "09:00", end: "17:00" } });
     expect(await check("08:30")).toMatchObject({ withinHours: false });
     expect(await check("16:45")).toMatchObject({ withinHours: false }); // 30 min visit would end 17:15
     expect(await check("16:30")).toMatchObject({ withinHours: true });
@@ -355,7 +355,14 @@ describe("slot interval and availability check", () => {
     const clash = await check("11:15");
     expect(clash.conflicts).toHaveLength(1);
     expect(clash.conflicts[0]).toMatchObject({ patientName: "Asha Rao", id: made.appointmentId });
-    expect((await check("11:30")).conflicts).toHaveLength(0); // back-to-back is fine
+    // back-to-back isn't an overlap, but it is inside the clinic's 5-minute gap after the 11:00 visit: a warning, not a block
+    const backToBack = await check("11:30");
+    expect(backToBack.conflicts).toHaveLength(0);
+    expect(backToBack.tight).toEqual([expect.objectContaining({ patientName: "Asha Rao", bufferMinutes: 5 })]);
+    expect((await check("11:35")).tight).toHaveLength(0);
+    // …and the time before it: this visit's own buffer would run into the 11:00 booking
+    expect((await check("10:30")).tight).toHaveLength(1);
+    expect((await check("10:25")).tight).toHaveLength(0);
     expect((await check("11:00", `&excludeAppointmentId=${made.appointmentId}`)).conflicts).toHaveLength(0); // moving it onto its own slot
     expect((await call("GET", `/v1/consultant/slots/check?serviceId=${sid}&resourceId=${rid}&startAt=2020-01-01T10:00:00%2B05:30`, { token })).body.inPast).toBe(true);
   });

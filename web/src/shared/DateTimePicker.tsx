@@ -20,11 +20,22 @@ function monthGrid(y: number, m: number): { y: number; m: number; d: number; out
   return cells.slice(0, cells.slice(35).every((c) => c.outside) ? 35 : 42);
 }
 
-/** Minutes offered in the minute menu: multiples of the step within the hour (always including the current value). */
-function minuteOptions(step: number, current: number): number[] {
-  const every = step >= 60 ? 60 : step;
-  const list = Array.from({ length: Math.ceil(60 / every) }, (_, i) => i * every).filter((m) => m < 60);
+/**
+ * The minutes offered for an hour: those where the time of day (counted from midnight) is a whole number of steps.
+ * For 45-minute slots that gives :00 and :45 at 9, :30 at 10, :15 at 11 — the real 9:00, 9:45, 10:30, 11:15… grid — where
+ * a naive "every 45 minutes within the hour" would offer :00/:45 every hour. Steps of an hour or more offer whole hours.
+ * The current minute is always included, so an existing off-grid booking is never silently changed.
+ */
+export function minuteOptions(step: number, hour: number, current: number): number[] {
+  const list: number[] = [];
+  for (let m = 0; m < 60; m++) if (step >= 60 ? m === 0 : (hour * 60 + m) % step === 0) list.push(m);
   return list.includes(current) ? list : [...list, current].sort((a, b) => a - b);
+}
+
+/** When the hour changes, move to the nearest minute that is valid in the new hour (so 10:45 doesn't linger at 45-minute slots). */
+function snapMinute(step: number, hour: number, minute: number): number {
+  const valid = minuteOptions(step, hour, -1).filter((m) => m >= 0);
+  return valid.reduce((best, m) => (Math.abs(m - minute) < Math.abs(best - minute) ? m : best), valid[0] ?? minute);
 }
 
 export interface DateTimePickerProps {
@@ -49,11 +60,15 @@ export function DateTimePicker({ value, onChange, minDate, stepMinutes }: DateTi
   const selectedKey = dateKey(w.y, w.m, w.d);
   const hour12 = w.h % 12 === 0 ? 12 : w.h % 12;
   const pm = w.h >= 12;
-  const minutes = minuteOptions(stepMinutes, w.min);
+  const minutes = minuteOptions(stepMinutes, w.h, w.min);
   const today = (() => { const n = new Date(); return dateKey(n.getFullYear(), n.getMonth() + 1, n.getDate()); })();
 
   const set = (patch: Partial<Wall>) => onChange(toLocalString({ ...w, ...patch }));
-  const setHour12 = (h: number, isPm: boolean) => set({ h: (h % 12) + (isPm ? 12 : 0) });
+  const setHour12 = (h: number, isPm: boolean) => {
+    const hour = (h % 12) + (isPm ? 12 : 0);
+    const valid = minuteOptions(stepMinutes, hour, w.min).includes(w.min) && (stepMinutes >= 60 ? w.min === 0 : (hour * 60 + w.min) % stepMinutes === 0);
+    set({ h: hour, min: valid ? w.min : snapMinute(stepMinutes, hour, w.min) });
+  };
   const shiftMonth = (delta: number) => setView(({ y, m }) => { const t = new Date(Date.UTC(y, m - 1 + delta, 1)); return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1 }; });
   const prevDisabled = minDate ? dateKey(view.y, view.m, 1) <= minDate : false;
 

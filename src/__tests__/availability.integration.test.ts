@@ -92,6 +92,15 @@ describe("diagnoseTime: says why a time can't be booked", () => {
     expect(await check(MON, "10:25")).toMatchObject({ available: true });
   });
 
+  it("right AFTER a visit, while its buffer is still running — and says when the next start is", async () => {
+    // the 11:00-11:30 visit's service has a 5-minute buffer
+    const r: any = await check(MON, "11:30");
+    expect(r).toMatchObject({ available: false, reason: "too_close" });
+    expect(r.message).toContain("right after another appointment");
+    expect(r.message).toContain("earliest start there is 11:35 AM");
+    expect(await check(MON, "11:35")).toMatchObject({ available: true });
+  });
+
   it("not one of the clinic's start times, when the interval is coarser", async () => {
     await setInterval_(20);
     try {
@@ -129,6 +138,39 @@ describe("diagnoseTime: says why a time can't be booked", () => {
   });
 });
 
+describe("moving an appointment must not collide with itself", () => {
+  const bookedId = async () => (await pool.query(`SELECT id FROM appointments WHERE tenant_id = $1 AND status IN ('PENDING_CONFIRMATION','CONFIRMED') AND patient_name = 'Booked Bea'`, [tenantId])).rows[0].id as string;
+
+  it("a 15-minute nudge of the 11:00 visit to 11:15 overlaps only itself, so it is allowed — and still refused for anyone else", async () => {
+    const id = await bookedId();
+    const cfg = await config();
+    expect(await diagnoseTime(cfg, resourceId, serviceId, at(MON, "11:15"), LONG_BEFORE)).toMatchObject({ available: false, reason: "booked" });
+    expect(await diagnoseTime(cfg, resourceId, serviceId, at(MON, "11:15"), LONG_BEFORE, id)).toMatchObject({ available: true });
+  });
+
+  it("the exclusion only lifts the moved appointment's own hold — other visits still block", async () => {
+    const id = await bookedId();
+    const cfg = await config();
+    // put a second visit at 12:00 and try to move the 11:00 one onto it
+    const other = await booking.createAppointment(cfg, { serviceId, resourceId, startAt: at(MON, "12:00"), patient: { name: "Other Olive", phone: "+919000066666" }, channel: "web" });
+    try {
+      expect(await diagnoseTime(cfg, resourceId, serviceId, at(MON, "12:00"), LONG_BEFORE, id)).toMatchObject({ available: false, reason: "booked" });
+      expect(await diagnoseTime(cfg, resourceId, serviceId, at(MON, "12:15"), LONG_BEFORE, id)).toMatchObject({ available: false });
+      expect(await diagnoseTime(cfg, resourceId, serviceId, at(MON, "11:15"), LONG_BEFORE, id)).toMatchObject({ available: true });
+    } finally {
+      await pool.query("DELETE FROM appointments WHERE id = $1", [other.appointmentId]); // leave the shared fixture as it was
+    }
+  });
+
+  it("offers fresh alternatives that also ignore the moved appointment's own hold", async () => {
+    const id = await bookedId();
+    const r: any = await diagnoseTime(await config(), resourceId, serviceId, at(MON, "08:30"), LONG_BEFORE, id); // before opening
+    expect(r).toMatchObject({ available: false, reason: "outside_hours" });
+    expect(r.nearest.length).toBeGreaterThan(0);
+    for (const s of r.nearest) expect(await diagnoseTime(await config(), resourceId, serviceId, new Date(s.startAt), LONG_BEFORE, id)).toMatchObject({ available: true });
+  });
+});
+
 describe("availability sees bookings that start just past the window", () => {
   it("doesn't offer a time whose visit would run into a booking that begins after the search window ends", async () => {
     const cfg = await config();
@@ -145,10 +187,10 @@ describe("availability sees bookings that start just past the window", () => {
     const starts = slots.map((s) => hhmm(s.startAt));
     expect(starts[0]).toBe("09:00");
     expect(starts.at(-1)).toBe("16:30");
-    // blocked: 10:30 (buffer) through 11:25 (visit 11:00-11:30). Free again from 11:30.
+    // The 11:00-11:30 visit reserves its 5-minute buffer after it, and a new visit needs its own 5 minutes before it:
+    // blocked 10:30 (this visit's buffer would run into it) through 11:30 (its buffer is still running); free again at 11:35.
     expect(starts).toContain("10:25");
-    expect(starts).not.toContain("10:30");
-    expect(starts).not.toContain("11:25");
-    expect(starts).toContain("11:30");
+    for (const t of ["10:30", "11:25", "11:30"]) expect(starts).not.toContain(t);
+    expect(starts).toContain("11:35");
   });
 });

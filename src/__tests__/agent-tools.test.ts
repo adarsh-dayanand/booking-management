@@ -424,6 +424,15 @@ describe("get_available_slots shows the whole picture, not just a sample", () =>
 });
 
 describe("rescheduling uses the same time handling", () => {
+  it("tells the availability check which appointment is moving, so it doesn't block itself", async () => {
+    const c = ctx("whatsapp", "919876543210");
+    query.mockResolvedValueOnce({ rows: [{}] }).mockResolvedValueOnce({ rows: [{ service_id: SERVICE, resource_id: RESOURCE }] });
+    const { rescheduleAppointment } = await import("../booking/booking");
+    (rescheduleAppointment as any).mockResolvedValue({ id: APPT, status: "CONFIRMED" });
+    await executeTool("reschedule_appointment", { appointmentId: APPT, date: "2030-01-08", time: "16:45" }, c);
+    expect(diagnoseTime.mock.calls.at(-1)![5]).toBe(APPT);
+  });
+
   it("moves to a clinic-local date and time, or explains why not", async () => {
     const c = ctx("whatsapp", "919876543210");
     const kol = { ...c, config: { ...c.config, tenant: { ...c.config.tenant, timezone: "Asia/Kolkata" } } };

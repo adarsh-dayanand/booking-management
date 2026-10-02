@@ -50,11 +50,15 @@ function ReasonModal({ title, confirm, onClose, onDone, path }: { title: string;
   );
 }
 
+interface Neighbour { id: string; patientName: string | null; startAt: string; endAt: string; bufferMinutes: number }
 interface SlotCheck {
   inPast: boolean;
   withinHours: boolean;
+  onGrid: boolean;
+  serviceBufferMinutes: number;
   hours: { start: string; end: string } | null;
-  conflicts: { id: string; patientName: string | null; startAt: string; endAt: string }[];
+  conflicts: Neighbour[];
+  tight: Neighbour[];
 }
 
 /**
@@ -90,13 +94,24 @@ function RescheduleModal({ appointment, onClose, onDone }: { appointment: Appoin
     }
   }
 
-  let note: { kind: string; text: string };
-  if (unchanged) note = { kind: "wait", text: "Pick a new date and time." };
-  else if (check.loading || !c) note = { kind: "wait", text: check.error || "Checking availability…" };
-  else if (c.inPast) note = { kind: "bad", text: "That time has already passed." };
-  else if (c.conflicts.length) note = { kind: "bad", text: `Overlaps ${c.conflicts.map((x) => `${x.patientName ?? "another booking"} (${formatInZone(x.startAt, tz, { hour: "numeric", minute: "2-digit", hour12: true })})`).join(", ")}. Choose a different time.` };
-  else if (!c.withinHours) note = { kind: "warn", text: c.hours ? `Outside ${appointment.resource_name}'s usual hours (${c.hours.start}–${c.hours.end}). You can still book it.` : `${appointment.resource_name} isn't normally working that day. You can still book it.` };
-  else note = { kind: "ok", text: "Free — inside working hours." };
+  // One headline plus any extra remarks. Only an overlap or a past time blocks; everything else is advice.
+  const clockOf = (iso: string) => formatInZone(iso, tz, { hour: "numeric", minute: "2-digit", hour12: true });
+  const notes: { kind: string; text: string }[] = [];
+  if (unchanged) notes.push({ kind: "wait", text: "Pick a new date and time." });
+  else if (check.loading || !c) notes.push({ kind: "wait", text: check.error || "Checking availability…" });
+  else if (c.inPast) notes.push({ kind: "bad", text: "That time has already passed." });
+  else if (c.conflicts.length) notes.push({ kind: "bad", text: `Overlaps ${c.conflicts.map((x) => `${x.patientName ?? "another booking"} (${clockOf(x.startAt)})`).join(", ")}. Choose a different time.` });
+  else {
+    if (!c.withinHours) notes.push({ kind: "warn", text: c.hours ? `Outside ${appointment.resource_name}'s usual hours (${c.hours.start}–${c.hours.end}). You can still book it.` : `${appointment.resource_name} isn't normally working that day. You can still book it.` });
+    for (const t of c.tight ?? []) {
+      const after = new Date(t.endAt).getTime() <= startUtc.getTime();
+      notes.push({ kind: "warn", text: after
+        ? `Right after ${t.patientName ?? "another"}'s visit (ends ${clockOf(t.endAt)}); that service keeps a ${t.bufferMinutes}-minute gap. You can still book it.`
+        : `Right before ${t.patientName ?? "another"}'s visit (${clockOf(t.startAt)}); this service keeps a ${c.serviceBufferMinutes}-minute gap after each visit. You can still book it.` });
+    }
+    if (!notes.some((n) => n.kind === "warn")) notes.unshift({ kind: "ok", text: "Free — inside working hours." });
+    if (c.onGrid === false) notes.push({ kind: "info", text: `Not one of the usual start times (every ${clinic.slotIntervalMinutes} minutes from opening), so users can't book this time themselves. You can.` });
+  }
 
   return (
     <Modal title="Reschedule" onClose={onClose} wide>
@@ -105,7 +120,7 @@ function RescheduleModal({ appointment, onClose, onDone }: { appointment: Appoin
         Currently {formatInZone(appointment.start_at, tz)}
       </p>
       <DateTimePicker value={value} onChange={setValue} minDate={localStringIn(new Date(), tz).slice(0, 10)} stepMinutes={clinic.slotIntervalMinutes} />
-      <div className={`avail avail-${note.kind}`} role="status">{note.text}</div>
+      {notes.map((n) => <div key={n.text} className={`avail avail-${n.kind === "info" ? "wait" : n.kind}`} role="status">{n.text}</div>)}
       <Alert>{error}</Alert>
       <p className="muted small" style={{ marginTop: 12 }}>
         Times are in {tz}, every {clinic.slotIntervalMinutes} minutes (change this in Settings). The user is told about the new time.

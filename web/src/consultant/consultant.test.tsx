@@ -177,7 +177,7 @@ describe("appointments", () => {
 
   describe("reschedule with the date-time picker", () => {
     // a1 starts 2031-01-01T10:00:00Z = Wed 1 Jan 15:30 in the clinic's zone (Asia/Kolkata)
-    const CHECK_OK = { startAt: "", endAt: "", inPast: false, withinHours: true, hours: { start: "09:00", end: "17:00" }, conflicts: [] };
+    const CHECK_OK = { startAt: "", endAt: "", inPast: false, withinHours: true, onGrid: true, serviceBufferMinutes: 5, hours: { start: "09:00", end: "17:00" }, conflicts: [], tight: [] };
     const openModal = async (check: unknown, extra: Record<string, unknown> = {}) => {
       const api = open("appointments/all", {
         "GET /v1/consultant/appointments": { appointments: [list[0]] },
@@ -235,6 +235,30 @@ describe("appointments", () => {
       expect(await within(dialog).findByText(/Overlaps Neha Iyer/)).toBeInTheDocument();
       expect(within(dialog).getByRole("button", { name: /^Move to/ })).toBeDisabled();
       expect(api.find("POST", "/v1/consultant/appointments/p/reschedule")).toHaveLength(0);
+    });
+
+    it("warns, without blocking, when a time is inside another visit's gap — after it or before it", async () => {
+      const after = { id: "x", patientName: "Neha Iyer", startAt: "2031-01-02T09:00:00Z", endAt: "2031-01-02T09:30:00Z", bufferMinutes: 15 };
+      const { dialog } = await openModal({ ...CHECK_OK, tight: [after] });
+      await pickDay(dialog); // 15:30 IST = 10:00Z, after the visit that ended 09:30Z
+      expect(await within(dialog).findByText(/Right after Neha Iyer's visit \(ends .*\); that service keeps a 15-minute gap/)).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /^Move to/ })).toBeEnabled();
+    });
+
+    it("warns about the gap before the next visit using the moved service's own buffer", async () => {
+      const next = { id: "y", patientName: "Vikram Shah", startAt: "2031-01-02T10:10:00Z", endAt: "2031-01-02T10:40:00Z", bufferMinutes: 5 };
+      const { dialog } = await openModal({ ...CHECK_OK, serviceBufferMinutes: 20, tight: [next] });
+      await pickDay(dialog); // starts 10:00Z, the visit at 10:10Z follows
+      expect(await within(dialog).findByText(/Right before Vikram Shah's visit .*this service keeps a 20-minute gap after each visit/)).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /^Move to/ })).toBeEnabled();
+    });
+
+    it("mentions when a time isn't one of the usual start times, but still allows it", async () => {
+      const { dialog } = await openModal({ ...CHECK_OK, onGrid: false });
+      await pickDay(dialog);
+      expect(await within(dialog).findByText(/Not one of the usual start times \(every 5 minutes from opening\)/)).toBeInTheDocument();
+      expect(within(dialog).getByText("Free — inside working hours.")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /^Move to/ })).toBeEnabled();
     });
 
     it("blocks a time in the past", async () => {

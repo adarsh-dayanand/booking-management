@@ -2,7 +2,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { DateTimePicker } from "./DateTimePicker";
+import { DateTimePicker, minuteOptions as minutesFor } from "./DateTimePicker";
 import { localStringIn, parseLocal, toLocalString, wallInZone, zonedToUtc } from "./zoned";
 
 afterEach(cleanup);
@@ -136,5 +136,45 @@ describe("DateTimePicker", () => {
     expect(screen.getByRole("group", { name: "Pick a date" })).toBeInTheDocument();
     const time = screen.getByRole("group", { name: "Pick a time" });
     expect(within(time).getByRole("group", { name: "AM or PM" })).toBeInTheDocument();
+  });
+});
+
+describe("minute choices follow the real grid, not 'every N minutes within each hour'", () => {
+  it("45-minute slots: :00 and :45 at 9, :30 at 10, :15 at 11 — the 9:00, 9:45, 10:30, 11:15 grid", () => {
+    expect(minutesFor(45, 9, 0)).toEqual([0, 45]);
+    expect(minutesFor(45, 10, 30)).toEqual([30]);
+    expect(minutesFor(45, 11, 15)).toEqual([15]);
+    expect(minutesFor(45, 12, 0)).toEqual([0, 45]);
+  });
+
+  it("slots that divide the hour behave as before", () => {
+    expect(minutesFor(15, 10, 0)).toEqual([0, 15, 30, 45]);
+    expect(minutesFor(20, 9, 0)).toEqual([0, 20, 40]);
+    expect(minutesFor(5, 3, 0)).toHaveLength(12);
+  });
+
+  it("steps of an hour or more offer whole hours", () => {
+    expect(minutesFor(60, 14, 0)).toEqual([0]);
+    expect(minutesFor(90, 14, 0)).toEqual([0]);
+  });
+
+  it("always keeps the current minute, so an existing off-grid booking is not changed", () => {
+    expect(minutesFor(45, 10, 7)).toEqual([7, 30]);
+  });
+
+  it("changing the hour moves to the nearest valid minute (10:45 doesn't linger at 45-minute slots)", async () => {
+    const onChange = vi.fn();
+    render(<Harness initial="2031-01-15T09:45" step={45} onChange={onChange} />);
+    await userEvent.selectOptions(hour(), "10"); // 10:45 isn't on the grid; 10:30 is
+    expect(onChange).toHaveBeenLastCalledWith("2031-01-15T10:30");
+    await userEvent.selectOptions(hour(), "11");
+    expect(onChange).toHaveBeenLastCalledWith("2031-01-15T11:15");
+  });
+
+  it("keeps the minute when it is still valid in the new hour", async () => {
+    const onChange = vi.fn();
+    render(<Harness initial="2031-01-15T09:30" step={15} onChange={onChange} />);
+    await userEvent.selectOptions(hour(), "2");
+    expect(onChange).toHaveBeenLastCalledWith("2031-01-15T02:30");
   });
 });

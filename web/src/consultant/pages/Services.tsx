@@ -33,7 +33,7 @@ function ServiceForm({ service, onClose, onSaved }: { service: Service | null; o
         <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} required minLength={2} maxLength={100} placeholder="General consultation" /></Field>
         <div className="form-row">
           <Field label="Duration (minutes)"><input type="number" min={5} max={480} step={5} value={duration} onChange={(e) => setDuration(e.target.value)} required /></Field>
-          <Field label="Buffer after (minutes)" hint="Gap kept free after each visit"><input type="number" min={0} max={120} step={5} value={buffer} onChange={(e) => setBuffer(e.target.value)} /></Field>
+          <Field label="Buffer after (minutes)" hint="Turnover time kept free after each visit, before the next booking"><input type="number" min={0} max={120} step={5} value={buffer} onChange={(e) => setBuffer(e.target.value)} /></Field>
         </div>
         <Alert>{error}</Alert>
         <div className="form-foot"><Button type="submit" disabled={busy}>{service ? "Save changes" : "Add service"}</Button><Button variant="ghost" onClick={onClose}>Cancel</Button></div>
@@ -59,7 +59,7 @@ export function ServicesPage() {
 
   return (
     <>
-      <PageHeader title="Services" subtitle="What users can book. Turning one off hides it from the chat but keeps past appointments." actions={<Button onClick={() => setEditing("new")}>Add service</Button>} />
+      <PageHeader title="Services" subtitle="What users can book. Each visit reserves its duration plus its buffer, so back-to-back bookings keep that gap. Turning a service off hides it from the chat but keeps past appointments." actions={<Button onClick={() => setEditing("new")}>Add service</Button>} />
       <Alert>{error || list.error}</Alert>
       <Card>
         {list.loading && !list.data ? <Spinner /> : !list.data?.length ? <Empty>No services yet. Add one so users can book.</Empty> : (

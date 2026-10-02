@@ -43,6 +43,8 @@ export interface GenerateSlotsOptions {
   minNoticeMinutes?: number;
   slotGranularityMinutes?: number;
   now?: Date;
+  /** Moving an appointment: it must not block its own new time. */
+  excludeAppointmentId?: string;
 }
 
 /**
@@ -112,17 +114,35 @@ export function openingWindowFor(
   service: Service,
   start: Date
 ): { within: boolean; window: { start: string; end: string } | null } {
+  const rule = ruleOn(config, resourceId, DateTime.fromJSDate(start, { zone: config.tenant.timezone }));
   const local = DateTime.fromJSDate(start, { zone: config.tenant.timezone });
-  const rules = config.availabilityRules.filter((r) => r.resourceId === resourceId);
-  const rule = rules.find((r) => r.specificDate === local.toISODate()) ?? rules.find((r) => r.weekday === local.weekday % 7);
-  if (!rule || rule.isClosed || !rule.startTime || !rule.endTime) return { within: false, window: null };
+  if (!rule) return { within: false, window: null };
   const minutes = (hhmmss: string) => Number(hhmmss.slice(0, 2)) * 60 + Number(hhmmss.slice(3, 5));
   const startMin = local.hour * 60 + local.minute;
   const endMin = startMin + service.durationMinutes;
   return {
-    within: startMin >= minutes(rule.startTime) && endMin <= minutes(rule.endTime),
-    window: { start: rule.startTime.slice(0, 5), end: rule.endTime.slice(0, 5) },
+    within: startMin >= minutes(rule.startTime!) && endMin <= minutes(rule.endTime!),
+    window: { start: rule.startTime!.slice(0, 5), end: rule.endTime!.slice(0, 5) },
   };
+}
+
+/** The opening rule in force for a local day: a date exception beats the weekly rule; null when closed or unset. */
+function ruleOn(config: TenantConfig, resourceId: string, local: DateTime) {
+  const rules = config.availabilityRules.filter((r) => r.resourceId === resourceId);
+  const rule = rules.find((r) => r.specificDate === local.toISODate()) ?? rules.find((r) => r.weekday === local.weekday % 7);
+  return rule && !rule.isClosed && rule.startTime && rule.endTime ? rule : null;
+}
+
+/**
+ * Whether `start` is one of the start times the clinic offers that day: opening time plus a whole number of slot
+ * intervals. (Offers are anchored at opening time, so 09:15 opening with 30-minute slots gives 09:15, 09:45…)
+ */
+export function onSlotGrid(config: TenantConfig, resourceId: string, start: Date): boolean {
+  const local = DateTime.fromJSDate(start, { zone: config.tenant.timezone });
+  const rule = ruleOn(config, resourceId, local);
+  if (!rule) return true; // no opening hours that day, so there is no grid to be off
+  const open = Number(rule.startTime!.slice(0, 2)) * 60 + Number(rule.startTime!.slice(3, 5));
+  return (local.hour * 60 + local.minute - open) % config.tenant.slotIntervalMinutes === 0;
 }
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
@@ -152,13 +172,18 @@ export async function generateAvailableSlots(
   const footprintMinutes = service.durationMinutes + service.bufferMinutes;
   const busyEnd = new Date(rangeEnd.getTime() + footprintMinutes * 60_000);
 
+  // Every visit reserves its own length PLUS ITS OWN service's buffer (turnover time). Without this a visit's buffer would
+  // protect only the time before the next booking, never the time after it — and with mixed services a 15-minute visit
+  // could be offered at the very minute a 45-minute visit with a 15-minute buffer ends.
   const existing = await pool.query(
-    `SELECT start_at, end_at FROM appointments
-     WHERE tenant_id = $1 AND resource_id = $2 AND status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED')
-       AND start_at < $4 AND end_at > $3`,
-    [config.tenant.id, resourceId, rangeStart, busyEnd]
+    `SELECT a.start_at, a.end_at + make_interval(mins => s.buffer_minutes) AS busy_end
+     FROM appointments a JOIN services s ON s.id = a.service_id
+     WHERE a.tenant_id = $1 AND a.resource_id = $2 AND a.status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED')
+       AND a.start_at < $4 AND a.end_at + make_interval(mins => s.buffer_minutes) > $3
+       AND ($5::uuid IS NULL OR a.id <> $5)`,
+    [config.tenant.id, resourceId, rangeStart, busyEnd, options.excludeAppointmentId ?? null]
   );
-  const busyIntervals = existing.rows.map((r) => ({ start: new Date(r.start_at), end: new Date(r.end_at) }));
+  const busyIntervals = existing.rows.map((r) => ({ start: new Date(r.start_at), end: new Date(r.busy_end) }));
 
   if (resource.googleConnectionStatus === "connected") {
     try {

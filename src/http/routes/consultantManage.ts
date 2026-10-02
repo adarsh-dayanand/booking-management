@@ -4,7 +4,7 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { pool } from "../../lib/db";
 import { NotFoundError, ValidationError } from "../../errors";
-import { generateAvailableSlots, openingWindowFor } from "../../booking/booking";
+import { generateAvailableSlots, onSlotGrid, openingWindowFor } from "../../booking/booking";
 import { loadTenantConfigById } from "../../booking/tenant";
 
 // What a consultant (clinic) manages for itself from the dashboard: services, practitioners and their hours,
@@ -214,14 +214,19 @@ consultantManageRouter.get("/slots/check", async (req, res, next) => {
     if (!service || !resource) throw new NotFoundError("Unknown service or practitioner");
     const start = new Date(q.startAt);
     const end = new Date(start.getTime() + service.durationMinutes * 60_000);
-    const clash = await pool.query(
-      `SELECT a.id, a.start_at, a.end_at, COALESCE(a.patient_name, p.name) AS patient_name
-       FROM appointments a JOIN patients p ON p.id = a.patient_id
+    const footprintEnd = new Date(end.getTime() + service.bufferMinutes * 60_000);
+    // visits whose time — including their own service's buffer — touches the chosen time
+    const near = await pool.query(
+      `SELECT a.id, a.start_at, a.end_at, s.buffer_minutes, COALESCE(a.patient_name, p.name) AS patient_name
+       FROM appointments a JOIN patients p ON p.id = a.patient_id JOIN services s ON s.id = a.service_id
        WHERE a.tenant_id = $1 AND a.resource_id = $2 AND a.status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED')
-         AND a.start_at < $4 AND a.end_at > $3 AND ($5::uuid IS NULL OR a.id <> $5)
+         AND a.start_at < $4 AND a.end_at + make_interval(mins => s.buffer_minutes) > $3 AND ($5::uuid IS NULL OR a.id <> $5)
        ORDER BY a.start_at`,
-      [tenantOf(req), q.resourceId, start, end, q.excludeAppointmentId ?? null]
+      [tenantOf(req), q.resourceId, start, footprintEnd, q.excludeAppointmentId ?? null]
     );
+    const view = (c: any) => ({ id: c.id, patientName: c.patient_name, startAt: c.start_at, endAt: c.end_at, bufferMinutes: c.buffer_minutes });
+    const overlapping = near.rows.filter((c) => new Date(c.start_at) < end && new Date(c.end_at) > start);
+    const tight = near.rows.filter((c) => !overlapping.includes(c));
     const hours = openingWindowFor(config, q.resourceId, service, start);
     res.json({
       startAt: start.toISOString(),
@@ -229,7 +234,11 @@ consultantManageRouter.get("/slots/check", async (req, res, next) => {
       inPast: start.getTime() < Date.now(),
       withinHours: hours.within,
       hours: hours.window,
-      conflicts: clash.rows.map((c) => ({ id: c.id, patientName: c.patient_name, startAt: c.start_at, endAt: c.end_at })),
+      conflicts: overlapping.map(view),
+      // not an overlap, but inside a clinic gap (the buffer after the previous visit, or before the next): a warning, never a block
+      tight: tight.map(view),
+      onGrid: onSlotGrid(config, q.resourceId, start),
+      serviceBufferMinutes: service.bufferMinutes, // the checked service's own turnover time (how much gap a visit of this service needs after it)
     });
   } catch (err) {
     next(fail(err));

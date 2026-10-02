@@ -4,6 +4,7 @@ import { loadTenantConfig } from "../booking/tenant";
 import * as booking from "../booking/booking";
 import { SlotConflictError } from "../errors";
 import { menuSlots } from "../booking/slotPicker";
+import { diagnoseTime } from "../booking/availability";
 import { appendPaymentLink, type PaymentOffer } from "../payments/offer";
 import { config as appConfig } from "../config";
 import { formatRupees, paymentActive, quoteFee } from "../payments/pricing";
@@ -262,6 +263,14 @@ async function onConfirmation(
   if (!match) return { replyText: "Sorry, please reply YES to confirm or NO to start over.", options };
   if (match.id === "no") return presentServices(config, channel, externalId);
 
+  // The menu was shown a while ago: another booking may since have taken the time or its buffer. Re-check what the
+  // database's overlap rule alone can't (the gap each visit keeps free), and re-offer fresh times if it's gone.
+  const check = await diagnoseTime(config, state.resourceId!, state.serviceId!, new Date(state.selectedSlot!.startAt));
+  if (!check.available) {
+    const fresh = await presentSlots(config, channel, externalId, { serviceId: state.serviceId, resourceId: state.resourceId });
+    return { ...fresh, replyText: `Sorry, that time is no longer available. ${fresh.replyText}` };
+  }
+
   try {
     const result = await booking.createAppointment(config, {
       serviceId: state.serviceId!,
@@ -288,7 +297,8 @@ async function onConfirmation(
     };
   } catch (err) {
     if (err instanceof SlotConflictError) {
-      return presentSlots(config, channel, externalId, { serviceId: state.serviceId, resourceId: state.resourceId });
+      const fresh = await presentSlots(config, channel, externalId, { serviceId: state.serviceId, resourceId: state.resourceId });
+      return { ...fresh, replyText: `Sorry, that time was just taken. ${fresh.replyText}` };
     }
     throw err;
   }

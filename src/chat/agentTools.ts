@@ -16,12 +16,12 @@ import { digitsOnly, isPlausiblePhone, normalizePhone } from "../lib/phone";
 export type { AgentSession, ToolContext } from "./toolKit";
 
 /** Re-derives availability (hours + bookings + the doctor's live calendar) instead of trusting a model-supplied time. */
-async function checkBookable(ctx: ToolContext, resourceId: string, serviceId: string, args: { date?: string; time?: string; startAt?: string }): Promise<{ start: Date } | { reply: ToolResult }> {
+async function checkBookable(ctx: ToolContext, resourceId: string, serviceId: string, args: { date?: string; time?: string; startAt?: string }, excludeAppointmentId?: string): Promise<{ start: Date } | { reply: ToolResult }> {
   const when = resolveWhen(ctx, args);
   if ("error" in when) return { reply: when };
   if (!ctx.config.services.some((sv) => sv.id === serviceId)) return { reply: { error: "Unknown service. Call list_services." } };
   if (!ctx.config.resources.some((r) => r.id === resourceId)) return { reply: { error: "Unknown practitioner. Call list_practitioners." } };
-  const check = await diagnoseTime(ctx.config, resourceId, serviceId, when.start);
+  const check = await diagnoseTime(ctx.config, resourceId, serviceId, when.start, new Date(), excludeAppointmentId);
   return check.available ? { start: when.start } : { reply: unavailableReply(ctx, check) };
 }
 
@@ -383,7 +383,7 @@ const tools: Tool[] = [
         ctx.config.tenant.id,
       ]);
       if (current.rows.length === 0) return { error: "Appointment not found." };
-      const bookable = await checkBookable(ctx, current.rows[0].resource_id, current.rows[0].service_id, args);
+      const bookable = await checkBookable(ctx, current.rows[0].resource_id, current.rows[0].service_id, args, args.appointmentId);
       if (!("start" in bookable)) return bookable.reply;
       const start = bookable.start;
       try {
