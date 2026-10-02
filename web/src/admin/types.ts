@@ -4,6 +4,7 @@ export interface Consultant {
   timezone: string;
   confirmationPolicy: "instant" | "staff_approval";
   whatsappPhoneNumberId: string | null;
+  whatsapp: { mode: "own" | "platform" | "none"; displayPhone: string | null; verifiedName: string | null; connectedAt: string | null };
   createdAt: string;
   paymentsEnabled: boolean;
   razorpayKeyId: string | null;

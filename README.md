@@ -236,26 +236,49 @@ one-row-per-booking model created, by phone number.
 > app access before. Remove it at https://myaccount.google.com/permissions
 > and try again — Google only issues a refresh token on first consent.
 
-## Connecting the WhatsApp bot
+## Connecting WhatsApp
 
-1. Create a Meta developer account and a WhatsApp Business app at
-   [developers.facebook.com](https://developers.facebook.com/).
-2. Get a test phone number and a temporary (or permanent) access token.
-3. Set `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_VERIFY_TOKEN` (any string you pick),
-   and `WHATSAPP_APP_SECRET` in `.env`.
-4. Expose your local server publicly for the webhook, e.g. with `ngrok`:
-   ```bash
-   ngrok http 4000
+Two ways to give a consultant a WhatsApp number. They can coexist.
+
+### A. The consultant connects their own number (Embedded Signup)
+
+Users chat with the **clinic's own number**, under the clinic's name. The consultant opens **WhatsApp** in their dashboard, clicks *Connect WhatsApp number*, signs in with Facebook and picks or adds a number. The platform then stores that consultant's business token (encrypted), registers the number, subscribes your webhook to their WhatsApp account, and creates a generic message template (`booking_update`) in their account. Their messages go out with **their** token; nobody shares one.
+
+Setup, once, by the platform operator in the [Meta developer console](https://developers.facebook.com/):
+
+1. Use (or create) a **Business** app with the **WhatsApp** product and **Facebook Login for Business**.
+2. Facebook Login for Business → **Configurations** → create one from the *WhatsApp Embedded Signup* template (permissions `whatsapp_business_management` and `whatsapp_business_messaging`). Copy its **Configuration ID**.
+3. App settings → Basic: copy the **App ID** and **App secret**. Facebook Login settings: enable *Login with the JavaScript SDK* and add your site's HTTPS domain to *Allowed domains for the JavaScript SDK*.
+4. In `.env`:
    ```
-5. In the Meta app's WhatsApp > Configuration page, set the webhook URL to
-   `https://<your-ngrok-domain>/v1/webhooks/whatsapp` and the verify token to
-   match `WHATSAPP_VERIFY_TOKEN`.
-6. Run this SQL to map the test phone number to your tenant:
-   ```sql
-   UPDATE tenants SET whatsapp_phone_number_id = '<phone_number_id_from_meta>' WHERE slug = 'demo-clinic';
+   META_APP_ID=<app id>
+   WHATSAPP_APP_SECRET=<app secret>
+   META_EMBEDDED_SIGNUP_CONFIG_ID=<configuration id>
+   WHATSAPP_VERIFY_TOKEN=<any string>
    ```
-7. Message the test number from WhatsApp — you should get the same guided
-   booking flow as the web widget.
+5. WhatsApp → Configuration: set the **one** webhook for the app to `https://<your-domain>/v1/webhooks/whatsapp` (verify token as above), subscribed to the **messages** field. It serves every connected consultant. For local work, use a tunnel (`ngrok http 4000`); the signup popup also needs an HTTPS page.
+
+Things to know:
+- **Development vs live.** While your Meta app is in development mode, only people with a role on the app can complete sign-up. Letting outside clinics connect requires Meta's **App Review** (advanced access to the two WhatsApp permissions), **business verification** and Tech Provider onboarding. Meta's requirements change; follow its current Embedded Signup documentation. This flow has been tested against a simulated Meta API, not a live app.
+- **The number.** It must be able to receive an SMS or call to verify. A number that's active on the regular WhatsApp / WhatsApp Business app **stops working there** once it moves to the Cloud API (Meta's *coexistence* option exists for some business-app numbers; check availability for your country). Use a spare or new number, not a personal one.
+- **Templates.** Reminders, approval requests and web-chat verification codes are sent outside WhatsApp's 24-hour window, so they use the `booking_update` template. Meta reviews it (usually minutes); the WhatsApp page shows its status. Replies to someone who just messaged work immediately.
+- **If a step fails** (e.g. registering the number), the connection is kept and the page shows what went wrong with a *Retry setup* button.
+- **Disconnecting** stops incoming messages and deletes the stored token. The number itself stays in the consultant's own WhatsApp account.
+
+### B. A number the platform operator owns (also Meta's test number)
+
+1. Get a test or production number and an access token in the Meta console; set `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_VERIFY_TOKEN` and `WHATSAPP_APP_SECRET` in `.env`.
+2. Register the webhook as in step 5 above.
+3. In the **admin console**, open the consultant → Profile → *WhatsApp phone number id* (consultants can't set this themselves).
+4. Optional `WHATSAPP_NOTIFY_TEMPLATE`: an approved template used outside the 24-hour window. Its body needs fixed text around the variable (for example `Update from your clinic: {{1}}. Reply here to book or cancel.`): Meta rejects a body that is only `{{1}}`.
+
+Meta's test number can only message numbers you add to its allowed list, and the temporary token expires in about 24 hours.
+
+**Seeing delivery results.** "accepted" from Meta doesn't mean "delivered". With the webhook subscribed to `messages`, the server logs each message's outcome, with Meta's error code and a hint:
+```
+[whatsapp] message …NjQ1OUZBAA== to +918861123860 FAILED (code 131049): …
+  → Meta chose not to deliver (its per-user marketing/engagement limits)…
+```
 
 ## Who is who
 

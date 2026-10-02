@@ -34,6 +34,9 @@ export const config = {
     notifyTemplateLang: process.env.WHATSAPP_NOTIFY_TEMPLATE_LANG || "en",
     // Meta retires old Graph API versions after about two years; match the version shown in your Meta app's API Setup page.
     graphVersion: process.env.WHATSAPP_GRAPH_VERSION || "v25.0",
+    // Embedded Signup (consultants connect their own number): the Meta app id and the signup configuration id.
+    appId: optional("META_APP_ID"),
+    embeddedSignupConfigId: optional("META_EMBEDDED_SIGNUP_CONFIG_ID"),
   },
   // Prepended to 10-digit numbers typed without a country code (India by default).
   defaultCountryCode: process.env.DEFAULT_COUNTRY_CODE || "91",
@@ -62,6 +65,9 @@ export const config = {
 export const isGoogleConfigured = Boolean(
   config.google.clientId && config.google.clientSecret && config.google.redirectUri
 );
+
+/** Consultants can connect their own number only when the platform has a Meta app (id + secret) and a signup configuration. */
+export const isEmbeddedSignupConfigured = Boolean(config.whatsapp.appId && config.whatsapp.appSecret && config.whatsapp.embeddedSignupConfigId);
 
 export const isWhatsappConfigured = Boolean(config.whatsapp.accessToken && config.whatsapp.verifyToken);
 

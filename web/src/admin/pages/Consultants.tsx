@@ -14,6 +14,9 @@ function zones(): string[] {
   }
 }
 
+export const whatsappBadge = (c: Consultant) =>
+  c.whatsapp.mode === "own" ? <Badge tone="good">Own number</Badge> : c.whatsapp.mode === "platform" ? <Badge tone="info">Platform number</Badge> : <Badge>Not connected</Badge>;
+
 export const paymentsBadge = (c: Consultant) =>
   !c.paymentsEnabled ? <Badge>Off</Badge> : <Badge tone={c.razorpayMode === "live" ? "good" : "warn"}>{c.razorpayMode === "live" ? "Live" : "Test mode"}</Badge>;
 
@@ -85,7 +88,7 @@ export function ConsultantsPage({ open }: { open: (slug: string) => void }) {
         {list.loading && !list.data ? <Spinner /> : !list.data?.length ? <Empty>No consultants yet.</Empty> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Name</th><th>Slug</th><th>Flow</th><th>Payments</th><th className="right">Appointments</th><th className="right">Users</th><th>Created</th></tr></thead>
+              <thead><tr><th>Name</th><th>Slug</th><th>Flow</th><th>Payments</th><th>WhatsApp</th><th className="right">Appointments</th><th className="right">Users</th><th>Created</th></tr></thead>
               <tbody>
                 {list.data.map((c) => (
                   <tr key={c.slug} className="clickable" onClick={() => open(c.slug)}>
@@ -93,6 +96,7 @@ export function ConsultantsPage({ open }: { open: (slug: string) => void }) {
                     <td className="mono">{c.slug}</td>
                     <td>{c.confirmationPolicy === "instant" ? "Direct" : "Doctor approval"}</td>
                     <td>{paymentsBadge(c)}</td>
+                    <td>{whatsappBadge(c)}</td>
                     <td className="right">{c.counts.appointments}</td>
                     <td className="right">{c.counts.users}</td>
                     <td>{formatDate(c.createdAt)}</td>

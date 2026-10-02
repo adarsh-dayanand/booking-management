@@ -92,3 +92,19 @@ export interface Transaction {
   patient_phone: string;
   service_name: string;
 }
+
+export interface WhatsAppConnection {
+  /** own = the consultant's connected number · platform = a number the platform operator set up · none */
+  mode: "own" | "platform" | "none";
+  phoneNumberId: string | null;
+  displayPhone: string | null;
+  verifiedName: string | null;
+  connectedAt: string | null;
+  quality: string | null;
+  template: { name: string; status: string | null } | null;
+}
+
+export interface WhatsAppInfo {
+  signup: { available: boolean; appId: string | null; configId: string | null; graphVersion: string };
+  connection: WhatsAppConnection;
+}

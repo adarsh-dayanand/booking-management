@@ -297,6 +297,22 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
         responses: { 200: json({ type: "object", properties: { startAt: { type: "string" }, endAt: { type: "string" }, inPast: { type: "boolean" }, withinHours: { type: "boolean" }, hours: { type: "object", nullable: true, properties: { start: { type: "string" }, end: { type: "string" } } }, conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, patientName: { type: "string", nullable: true }, startAt: { type: "string" }, endAt: { type: "string" } } } } } }), 400: errorResponse("Bad input"), 404: errorResponse("Unknown service or practitioner") },
       },
     },
+    "/v1/consultant/whatsapp": {
+      get: { tags: ["consultant"], summary: "WhatsApp: connection status and whether sign-up is available", description: "`signup` carries the public Meta app id and signup configuration id the dashboard's Facebook popup needs (never the app secret). `connection.mode`: `own` = the consultant's connected number, `platform` = a number the admin set up, `none`.", security: bearer, responses: { 200: json({ type: "object", properties: { signup: { type: "object", properties: { available: { type: "boolean" }, appId: { type: "string", nullable: true }, configId: { type: "string", nullable: true }, graphVersion: { type: "string" } } }, connection: ref("WhatsAppConnection") } }), 401: errorResponse("Unauthorized") } },
+      delete: { tags: ["consultant"], summary: "WhatsApp: disconnect (forgets the stored token, stops incoming messages)", security: bearer, responses: { 204: { description: "Disconnected" } } },
+    },
+    "/v1/consultant/whatsapp/connect": {
+      post: {
+        tags: ["consultant"], summary: "WhatsApp: finish Embedded Signup with the popup's result",
+        description: "The server exchanges `code` for the consultant's business token using the app secret, checks the number really belongs to that WhatsApp account, stores the token encrypted, then registers the number, subscribes the webhook and creates the notification template. Later-step failures are returned as `warnings` (the connection is kept; call /repair).",
+        security: bearer,
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["code", "phoneNumberId", "wabaId"], properties: { code: { type: "string" }, phoneNumberId: { type: "string" }, wabaId: { type: "string" } } } } } },
+        responses: { 201: json({ type: "object", properties: { connection: ref("WhatsAppConnection"), warnings: { type: "array", items: { type: "string" } } } }), 400: errorResponse("Rejected code / number not in that account / already used by another consultant / sign-up not enabled"), 401: errorResponse("Unauthorized") },
+      },
+    },
+    "/v1/consultant/whatsapp/repair": {
+      post: { tags: ["consultant"], summary: "WhatsApp: re-run register / subscribe / template with the stored token", security: bearer, responses: { 200: json({ type: "object", properties: { connection: ref("WhatsAppConnection"), warnings: { type: "array", items: { type: "string" } } } }), 404: errorResponse("No connected number") } },
+    },
     "/v1/consultant/payments/transactions": {
       get: { tags: ["consultant"], summary: "Payment history", security: bearer, parameters: [{ name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } }], responses: { 200: json({ type: "object", properties: { transactions: { type: "array", items: { type: "object" } } } }) } },
     },
@@ -413,6 +429,10 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
         type: "object",
         properties: { available: { type: "boolean", description: "The admin has enabled payments for this consultant" }, collectPayments: { type: "boolean" }, currency: { type: "string", example: "INR" }, pricing: ref("Pricing"), note: { type: "string" } },
       },
+      WhatsAppConnection: {
+        type: "object",
+        properties: { mode: { type: "string", enum: ["own", "platform", "none"] }, phoneNumberId: { type: "string", nullable: true }, displayPhone: { type: "string", nullable: true }, verifiedName: { type: "string", nullable: true }, connectedAt: { type: "string", format: "date-time", nullable: true }, quality: { type: "string", nullable: true }, template: { type: "object", nullable: true, properties: { name: { type: "string" }, status: { type: "string", nullable: true, example: "APPROVED" } } } },
+      },
       Service: { type: "object", properties: { id: { type: "string", format: "uuid" }, name: { type: "string" }, durationMinutes: { type: "integer" }, bufferMinutes: { type: "integer" }, active: { type: "boolean" } } },
       Practitioner: { type: "object", properties: { id: { type: "string", format: "uuid" }, name: { type: "string" }, active: { type: "boolean" }, googleConnectionStatus: { type: "string", enum: ["disconnected", "connected", "error"] }, googleCalendarId: { type: "string", nullable: true } } },
       Availability: {
@@ -488,7 +508,7 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           reminderHoursBefore: { type: "integer", description: "0 disables reminders." },
           slotIntervalMinutes: { type: "integer", minimum: 5, maximum: 240, default: 5, description: "Minutes between offered start times (5 → 9:00, 9:05, 9:10…; 30 → 9:00, 9:30…). Also the step in the dashboard's reschedule time picker." },
           faqText: { type: "string", nullable: true, description: "Clinic info the agent may answer questions from." },
-          whatsappPhoneNumberId: { type: "string", nullable: true },
+          whatsappPhoneNumberId: { type: "string", nullable: true, description: "Read-only here. Connect a number on the WhatsApp page." },
         },
       },
       SettingsPatch: {
@@ -499,7 +519,8 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           reminderHoursBefore: { type: "integer", minimum: 0, maximum: 168 },
           slotIntervalMinutes: { type: "integer", minimum: 5, maximum: 240 },
           faqText: { type: "string", nullable: true, maxLength: 4000 },
-          whatsappPhoneNumberId: { type: "string", nullable: true },
+          // whatsappPhoneNumberId is intentionally absent: consultants connect a number on the WhatsApp page (or the admin sets one);
+          // sending it here is rejected.
         },
       },
       User: {

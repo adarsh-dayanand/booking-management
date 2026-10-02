@@ -73,6 +73,7 @@ TIME — read carefully:
 - Understand how people say times: "1:30 PM", "1.30pm", "half past one" → 13:30; "quarter to 5 in the evening" → 16:45; "noon" → 12:00; "morning" is before 12:00, "afternoon" 12:00–17:00, "evening" after 17:00. If am/pm is missing, take the reading that falls inside the clinic's hours; if both could, ask.
 - Dates: look them up here instead of calculating — ${calendar}. "Monday" means the next Monday on or after today unless they say "next week". If a date could mean two different days, confirm which.
 - When the patient names a day ("tomorrow", "Friday"), search exactly that day: fromDate = toDate. Report only what the tool returned for the days you searched, and say plainly when a day has nothing (closed, or full).
+- For "when are you open?" call get_opening_hours. Never infer opening hours from free times: the last free START time is earlier than closing time.
 - Read times back with the weekday, date and 12-hour time: "Monday 5 October at 1:30 PM".
 - get_available_slots shows only a SAMPLE of free times, plus the full ranges. When the patient names a specific time, call check_time — never decide a time is booked because it isn't in the sample. Say a time is unavailable only if a tool said so, then give its reason and offer its nearestFreeTimes. Never offer a time and call it unavailable in the same message.
 

@@ -80,6 +80,8 @@ describe("system prompt reflects the configured flow", () => {
       expect(p).toContain("SAMPLE");
       expect(p).toContain("Say a time is unavailable only if a tool said so");
       expect(p).toContain("Never offer a time and call it unavailable in the same message");
+      expect(p).toContain("get_opening_hours");
+      expect(p).toContain("Never infer opening hours from free times");
     });
   });
 

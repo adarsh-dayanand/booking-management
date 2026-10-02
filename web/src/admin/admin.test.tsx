@@ -19,7 +19,7 @@ afterEach(() => {
 
 const OVERVIEW = { consultants: 3, paymentsEnabled: 1, appointments30d: 120, users: 480, revenue30dPaise: 7500000 };
 const consultant = (over: Partial<Consultant> = {}): Consultant => ({
-  slug: "demo-clinic", name: "Demo Clinic", timezone: "Asia/Kolkata", confirmationPolicy: "staff_approval", whatsappPhoneNumberId: null, createdAt: "2030-01-01T00:00:00Z",
+  slug: "demo-clinic", name: "Demo Clinic", timezone: "Asia/Kolkata", confirmationPolicy: "staff_approval", whatsappPhoneNumberId: null, whatsapp: { mode: "none", displayPhone: null, verifiedName: null, connectedAt: null }, createdAt: "2030-01-01T00:00:00Z",
   paymentsEnabled: false, razorpayKeyId: null, razorpayMode: null, keySecretConfigured: false, webhookSecretConfigured: false, consultantCollectsPayments: false,
   webhookUrl: "http://localhost:4000/v1/webhooks/razorpay/demo-clinic", counts: { appointments: 7, users: 5, logins: 1 }, ...over,
 });
@@ -123,6 +123,16 @@ describe("consultants", () => {
     expect(window.location.hash).toBe("#/consultants/sunrise-dental-clinic");
   });
 
+  it("shows who has connected their own WhatsApp number", async () => {
+    const own = { mode: "own" as const, displayPhone: "+91 98765 43210", verifiedName: "Sunrise Dental", connectedAt: "2030-01-01T00:00:00Z" };
+    open("consultants", { "GET /v1/admin/tenants": { tenants: [consultant({ whatsapp: own }), consultant({ slug: "p", name: "Platform Clinic", whatsapp: { ...own, mode: "platform" } }), consultant({ slug: "n", name: "No WA Clinic" })] } });
+    await screen.findByText("Demo Clinic");
+    const rowOf = (n: string) => screen.getByText(n).closest("tr")!;
+    expect(within(rowOf("Demo Clinic")).getByText("Own number")).toBeInTheDocument();
+    expect(within(rowOf("Platform Clinic")).getByText("Platform number")).toBeInTheDocument();
+    expect(within(rowOf("No WA Clinic")).getByText("Not connected")).toBeInTheDocument();
+  });
+
   it("keeps a slug the admin edited by hand", async () => {
     open("consultants", { "GET /v1/admin/tenants": { tenants: [] } });
     await userEvent.click(await screen.findByRole("button", { name: "New consultant" }));
@@ -208,6 +218,18 @@ describe("consultant detail: profile and logins", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save profile" }));
     expect(await screen.findByText("Saved.")).toBeInTheDocument();
     expect(api.find("PUT", "/v1/admin/tenants/demo-clinic")[0].body).toEqual({ name: "Renamed", timezone: "Asia/Kolkata", whatsappPhoneNumberId: null });
+  });
+
+  it("locks the WhatsApp number id when the consultant connected their own, and doesn't send it", async () => {
+    const own = { mode: "own" as const, displayPhone: "+91 98765 43210", verifiedName: "Sunrise Dental", connectedAt: "2030-01-01T00:00:00Z" };
+    const api = open("consultants/demo-clinic", { "GET /v1/admin/tenants/demo-clinic": { consultant: consultant({ whatsapp: own, whatsappPhoneNumberId: "555000111" }) }, "PUT /v1/admin/tenants/demo-clinic": { consultant: consultant() } });
+    await screen.findByRole("heading", { name: "Demo Clinic" });
+    await userEvent.click(screen.getByRole("tab", { name: "Profile" }));
+    expect(screen.getByLabelText(/WhatsApp phone number id/)).toBeDisabled();
+    expect(screen.getByText(/Sunrise Dental/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Save profile" }));
+    await screen.findByText("Saved.");
+    expect(api.find("PUT", "/v1/admin/tenants/demo-clinic")[0].body).toEqual({ name: "Demo Clinic", timezone: "Asia/Kolkata" });
   });
 
   it("adds a login, resets a password and removes one after confirming", async () => {

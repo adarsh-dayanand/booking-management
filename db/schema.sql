@@ -240,3 +240,16 @@ CREATE INDEX IF NOT EXISTS payments_tenant_idx ON payments (tenant_id, status);
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS slot_interval_minutes int NOT NULL DEFAULT 5;
 ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_slot_interval_check;
 ALTER TABLE tenants ADD CONSTRAINT tenants_slot_interval_check CHECK (slot_interval_minutes BETWEEN 5 AND 240);
+
+-- ---------------------------------------------------------------------------
+-- WhatsApp Embedded Signup: a consultant connects their OWN WhatsApp Business number.
+-- The token is the business token Meta returns for that consultant's WhatsApp account; it is stored encrypted.
+-- Consultants without a token still work through the platform-wide WHATSAPP_ACCESS_TOKEN (e.g. Meta's test number).
+-- ---------------------------------------------------------------------------
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_waba_id text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_access_token_encrypted text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_register_pin_encrypted text;   -- the two-step-verification PIN we set when registering the number
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_display_phone text;             -- what users see, e.g. "+91 98765 43210"
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_verified_name text;             -- the business name shown on the chat
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_template_name text;             -- approved template used outside the 24h window
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS whatsapp_connected_at timestamptz;

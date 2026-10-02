@@ -11,6 +11,7 @@ import { PractitionersPage } from "./pages/Practitioners";
 import { ServicesPage } from "./pages/Services";
 import { SettingsPage } from "./pages/Settings";
 import { UsersPage } from "./pages/Users";
+import { WhatsAppPage } from "./pages/WhatsApp";
 import type { Settings } from "./types";
 
 const NAV = [
@@ -20,6 +21,7 @@ const NAV = [
   { id: "services", label: "Services" },
   { id: "practitioners", label: "Practitioners" },
   { id: "payments", label: "Payments" },
+  { id: "whatsapp", label: "WhatsApp" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -61,6 +63,7 @@ export function App() {
         : page === "services" ? <ServicesPage />
         : page === "practitioners" ? <PractitionersPage />
         : page === "payments" ? <PaymentsPage />
+        : page === "whatsapp" ? <WhatsAppPage />
         : page === "settings" ? <SettingsPage onSaved={(s) => setClinic(toClinic(s))} />
         : <OverviewPage go={navigate} />}
     </Shell>

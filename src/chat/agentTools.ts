@@ -140,7 +140,7 @@ const tools: Tool[] = [
         slots: picked,
         ranges: freeRanges(found, tz, slotIntervalMinutes).slice(0, 40),
         intervalMinutes: slotIntervalMinutes,
-        note: `slots is only a sample. ranges shows every free start time (every ${slotIntervalMinutes} minutes between "from" and "to"). A time inside a range is free even if it isn't in slots — don't tell the patient it is booked; check it with check_time.`,
+        note: `slots is only a sample. ranges shows every free START time (every ${slotIntervalMinutes} minutes from firstStart to lastStart); lastStart is when the last visit begins, NOT the closing time (call get_opening_hours for that). A time inside a range is free even if it isn't in slots — don't tell the patient it is booked; check it with check_time.`,
       };
     },
   },

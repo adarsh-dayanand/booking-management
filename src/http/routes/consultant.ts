@@ -14,6 +14,7 @@ import { isPgError } from "../../lib/db";
 import { loadTenantConfigById } from "../../booking/tenant";
 import { consultantPaymentsRouter } from "./consultantPayments";
 import { consultantManageRouter } from "./consultantManage";
+import { consultantWhatsappRouter } from "./consultantWhatsapp";
 
 export const consultantRouter = Router();
 
@@ -36,6 +37,7 @@ consultantRouter.use(requireAuth);
 
 consultantRouter.use("/payments", consultantPaymentsRouter);
 consultantRouter.use(consultantManageRouter);
+consultantRouter.use("/whatsapp", consultantWhatsappRouter);
 
 consultantRouter.get("/appointments", async (req, res, next) => {
   try {
@@ -148,9 +150,9 @@ const settingsSchema = z
     reminderHoursBefore: z.number().int().min(0).max(168),
     slotIntervalMinutes: z.number().int().min(5, "slot interval must be at least 5 minutes").max(240),
     faqText: z.string().max(4000).nullable(),
-    whatsappPhoneNumberId: z.string().min(1).max(64).nullable(),
   })
-  .partial();
+  .partial()
+  .strict(); // the WhatsApp number is connected on the WhatsApp page (or set by the admin), never typed in here
 
 consultantRouter.put("/settings", async (req, res, next) => {
   try {
@@ -163,7 +165,6 @@ consultantRouter.put("/settings", async (req, res, next) => {
       reminderHoursBefore: "reminder_hours_before",
       slotIntervalMinutes: "slot_interval_minutes",
       faqText: "faq_text",
-      whatsappPhoneNumberId: "whatsapp_phone_number_id",
     };
     const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
     if (entries.length === 0) throw new ValidationError("No settings provided");
@@ -178,10 +179,9 @@ consultantRouter.put("/settings", async (req, res, next) => {
     if (settings.confirmationPolicy === "staff_approval" && !settings.staffWhatsappNumber) {
       warnings.push("staff_approval is on but staffWhatsappNumber is not set: the doctor won't get WhatsApp approval requests (the dashboard still works).");
     }
-    if (!settings.whatsappPhoneNumberId) warnings.push("whatsappPhoneNumberId is not set: no WhatsApp messages can be received or sent for this clinic.");
+    if (!settings.whatsappPhoneNumberId) warnings.push("No WhatsApp number is connected: no WhatsApp messages can be received or sent for this clinic. Connect one on the WhatsApp page.");
     res.json({ settings, warnings });
   } catch (err) {
-    if (isPgError(err, "23505")) return next(new ValidationError("That WhatsApp phone number id is already used by another clinic"));
     next(err instanceof z.ZodError ? new ValidationError(err.issues[0]?.message) : err);
   }
 });

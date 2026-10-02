@@ -5,7 +5,7 @@ import { errorMessage } from "../../shared/http";
 import { useAsync, useCopy } from "../../shared/hooks";
 import { Alert, Button, Card, Empty, Field, Modal, PageHeader, Spinner, Tabs } from "../../shared/ui";
 import type { Consultant, Login } from "../types";
-import { paymentsBadge } from "./Consultants";
+import { paymentsBadge, whatsappBadge } from "./Consultants";
 
 type Msg = { ok: boolean; text: string } | null;
 
@@ -13,12 +13,13 @@ function Profile({ c, onSaved }: { c: Consultant; onSaved: () => void }) {
   const [name, setName] = useState(c.name);
   const [timezone, setTimezone] = useState(c.timezone);
   const [phoneId, setPhoneId] = useState(c.whatsappPhoneNumberId ?? "");
+  const own = c.whatsapp.mode === "own";
   const [msg, setMsg] = useState<Msg>(null);
   async function save(e: FormEvent) {
     e.preventDefault();
     setMsg(null);
     try {
-      await api.put(`/v1/admin/tenants/${c.slug}`, { name, timezone, whatsappPhoneNumberId: phoneId.trim() || null });
+      await api.put(`/v1/admin/tenants/${c.slug}`, { name, timezone, ...(own ? {} : { whatsappPhoneNumberId: phoneId.trim() || null }) });
       setMsg({ ok: true, text: "Saved." });
       onSaved();
     } catch (err) {
@@ -34,8 +35,16 @@ function Profile({ c, onSaved }: { c: Consultant; onSaved: () => void }) {
         </div>
         <div className="form-row">
           <Field label="Timezone"><input value={timezone} onChange={(e) => setTimezone(e.target.value)} required /></Field>
-          <Field label="WhatsApp phone number id" hint="Links the consultant's WhatsApp number (from the Meta console) to this account."><input value={phoneId} onChange={(e) => setPhoneId(e.target.value)} /></Field>
+          <Field
+            label="WhatsApp phone number id"
+            hint={own ? "The consultant connected their own number, so this can't be changed here. They (or you) must disconnect it first." : "Only for a number the platform owns (e.g. Meta's test number). Consultants normally connect their own number from their WhatsApp page."}
+          >
+            <input value={phoneId} onChange={(e) => setPhoneId(e.target.value)} disabled={own} />
+          </Field>
         </div>
+        <p className="muted small" style={{ marginBottom: 8 }}>
+          WhatsApp: {whatsappBadge(c)} {c.whatsapp.displayPhone && <>{c.whatsapp.displayPhone} · {c.whatsapp.verifiedName}</>}
+        </p>
         <p className="muted small">Chat widget snippet: <code>{`<script src="/widget.js" data-tenant="${c.slug}" defer></script>`}</code></p>
         <Alert kind={msg?.ok ? "success" : "error"}>{msg?.text}</Alert>
         <Button type="submit">Save profile</Button>

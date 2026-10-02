@@ -20,7 +20,7 @@ const INTERVAL_PRESETS = [5, 10, 15, 20, 30, 45, 60];
 function SettingsForm({ initial, onSaved }: { initial: Settings; onSaved: (s: Settings) => void }) {
   const [f, setF] = useState({
     name: initial.name, timezone: initial.timezone, policy: initial.confirmationPolicy, staffNumber: initial.staffWhatsappNumber ?? "",
-    phoneId: initial.whatsappPhoneNumberId ?? "", reminder: String(initial.reminderHoursBefore), faq: initial.faqText ?? "",
+    reminder: String(initial.reminderHoursBefore), faq: initial.faqText ?? "",
     interval: String(initial.slotIntervalMinutes),
   });
   const [customInterval, setCustomInterval] = useState(() => !INTERVAL_PRESETS.includes(initial.slotIntervalMinutes));
@@ -34,7 +34,7 @@ function SettingsForm({ initial, onSaved }: { initial: Settings; onSaved: (s: Se
     try {
       const r = await api.put<SettingsResponse>("/v1/consultant/settings", {
         name: f.name, timezone: f.timezone, confirmationPolicy: f.policy,
-        staffWhatsappNumber: f.staffNumber.trim() || null, whatsappPhoneNumberId: f.phoneId.trim() || null,
+        staffWhatsappNumber: f.staffNumber.trim() || null,
         reminderHoursBefore: Number(f.reminder), slotIntervalMinutes: Number(f.interval), faqText: f.faq.trim() || null,
       });
       setMsg({ ok: true, text: "Saved." });
@@ -76,10 +76,9 @@ function SettingsForm({ initial, onSaved }: { initial: Settings; onSaved: (s: Se
           )}
         </div>
       </Card>
-      <Card title="WhatsApp & reminders">
+      <Card title="Doctor alerts & reminders">
         <div className="form-row">
-          <Field label="Doctor's WhatsApp number" hint="With country code. Approval requests and alerts go here."><input value={f.staffNumber} onChange={(e) => set("staffNumber", e.target.value)} placeholder="+91 98765 43210" /></Field>
-          <Field label="WhatsApp phone number id" hint="From the Meta developer console. Links your WhatsApp number to this clinic."><input value={f.phoneId} onChange={(e) => set("phoneId", e.target.value)} /></Field>
+          <Field label="Doctor's WhatsApp number" hint="With country code. Approval requests and alerts go here. Connect the clinic's own WhatsApp number on the WhatsApp page."><input value={f.staffNumber} onChange={(e) => set("staffNumber", e.target.value)} placeholder="+91 98765 43210" /></Field>
           <Field label="Reminder (hours before)" hint="0 turns reminders off."><input type="number" min={0} max={168} value={f.reminder} onChange={(e) => set("reminder", e.target.value)} /></Field>
         </div>
       </Card>

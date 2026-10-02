@@ -58,6 +58,12 @@ function consultantView(t: any) {
     timezone: t.timezone,
     confirmationPolicy: t.confirmation_policy,
     whatsappPhoneNumberId: t.whatsapp_phone_number_id,
+    whatsapp: {
+      mode: t.whatsapp_access_token_encrypted ? "own" : t.whatsapp_phone_number_id ? "platform" : "none",
+      displayPhone: t.whatsapp_display_phone,
+      verifiedName: t.whatsapp_verified_name,
+      connectedAt: t.whatsapp_connected_at,
+    },
     createdAt: t.created_at,
     counts: t.counts,
   };
@@ -168,6 +174,10 @@ adminRouter.put("/tenants/:slug", async (req, res, next) => {
   try {
     const patch = updateSchema.parse(req.body ?? {});
     const tenant = await findTenant(req.params.slug);
+    if (patch.whatsappPhoneNumberId !== undefined && patch.whatsappPhoneNumberId !== tenant.whatsapp_phone_number_id && tenant.whatsapp_access_token_encrypted) {
+      // The stored token belongs to the number the consultant connected; swapping the id would point it at the wrong number.
+      throw new ValidationError("This consultant connected their own WhatsApp number. Ask them to disconnect it (WhatsApp page) before changing it here.");
+    }
     const result = await pool.query(
       `UPDATE tenants SET name = $2, timezone = $3, whatsapp_phone_number_id = $4 WHERE id = $1 RETURNING id`,
       [

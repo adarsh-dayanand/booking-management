@@ -69,13 +69,16 @@ export function unavailableReply(ctx: ToolContext, check: Extract<TimeCheck, { a
   };
 }
 
-/** Collapse a day's free start times into ranges ("9:00 AM to 4:30 PM"), so the agent sees ALL of them, not a sample. */
+/**
+ * Collapse a day's free START times into ranges, so the agent sees ALL of them, not a sample. These are start times:
+ * the last one is not the closing time (a 30-minute visit starting at 4:30 PM ends at 5:00 PM).
+ */
 export function freeRanges(
   slots: { startAt: string; practitionerId: string; practitionerName: string }[],
   tz: string,
   intervalMinutes: number
-): { practitioner: string; date: string; day: string; from: string; to: string }[] {
-  const out: { practitioner: string; date: string; day: string; from: string; to: string; at: number }[] = [];
+): { practitioner: string; date: string; day: string; firstStart: string; lastStart: string }[] {
+  const out: { practitioner: string; date: string; day: string; firstStart: string; lastStart: string; at: number }[] = [];
   const byPractitioner = new Map<string, typeof slots>();
   for (const s of slots) (byPractitioner.get(s.practitionerId) ?? byPractitioner.set(s.practitionerId, []).get(s.practitionerId)!).push(s);
   for (const list of byPractitioner.values()) {
@@ -85,7 +88,7 @@ export function freeRanges(
     const flush = () => {
       const a = DateTime.fromISO(runStart.startAt, { zone: "utc" }).setZone(tz);
       const b = DateTime.fromISO(prev.startAt, { zone: "utc" }).setZone(tz);
-      out.push({ practitioner: runStart.practitionerName, date: a.toISODate()!, day: a.toFormat("ccc d LLL"), from: a.toFormat("h:mm a"), to: b.toFormat("h:mm a"), at: Date.parse(runStart.startAt) });
+      out.push({ practitioner: runStart.practitionerName, date: a.toISODate()!, day: a.toFormat("ccc d LLL"), firstStart: a.toFormat("h:mm a"), lastStart: b.toFormat("h:mm a"), at: Date.parse(runStart.startAt) });
     };
     for (const s of list.slice(1)) {
       const gap = (Date.parse(s.startAt) - Date.parse(prev.startAt)) / 60_000;
@@ -98,7 +101,56 @@ export function freeRanges(
   return out.sort((a, b) => a.at - b.at).map(({ at: _at, ...range }) => range);
 }
 
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON_FIRST = [1, 2, 3, 4, 5, 6, 0];
+const hhmm12 = (t: string): string => DateTime.fromFormat(t.slice(0, 5), "HH:mm").toFormat("h:mm a");
+
+/** "Mon–Fri 9:00 AM–5:00 PM · Sat 9:00 AM–1:00 PM · Sun closed" from a practitioner's weekly rules. */
+export function describeWeek(rules: { weekday: number | null; startTime: string | null; endTime: string | null; isClosed: boolean }[]): string[] {
+  const byDay = new Map<number, string>();
+  for (const r of rules) if (r.weekday !== null) byDay.set(r.weekday, r.isClosed || !r.startTime || !r.endTime ? "closed" : `${hhmm12(r.startTime)}–${hhmm12(r.endTime)}`);
+  const out: string[] = [];
+  let i = 0;
+  while (i < MON_FIRST.length) {
+    const label = byDay.get(MON_FIRST[i]) ?? "closed";
+    let j = i;
+    while (j + 1 < MON_FIRST.length && (byDay.get(MON_FIRST[j + 1]) ?? "closed") === label) j++;
+    out.push(`${i === j ? DAY_NAMES[MON_FIRST[i]] : `${DAY_NAMES[MON_FIRST[i]]}–${DAY_NAMES[MON_FIRST[j]]}`}: ${label}`);
+    i = j + 1;
+  }
+  return out;
+}
+
 export const whenTools: Tool[] = [
+  {
+    write: false,
+    declaration: {
+      name: "get_opening_hours",
+      description:
+        "The clinic's actual opening hours for each practitioner, plus upcoming holidays or special days. Use this when asked 'when are you open?' — never work hours out from the free times (the last free START time is not the closing time).",
+      parameters: { type: "object", properties: {} },
+    },
+    run: async (_args, ctx) => {
+      const { config } = ctx;
+      const today = DateTime.now().setZone(config.tenant.timezone).toISODate()!;
+      const horizon = DateTime.now().setZone(config.tenant.timezone).plus({ days: 60 }).toISODate()!;
+      return {
+        timezone: config.tenant.timezone,
+        practitioners: config.resources.filter((r) => r.active).map((r) => {
+          const rules = config.availabilityRules.filter((x) => x.resourceId === r.id);
+          return {
+            name: r.name,
+            weekly: describeWeek(rules),
+            upcomingChanges: rules
+              .filter((x) => x.specificDate && x.specificDate >= today && x.specificDate <= horizon)
+              .sort((a, b) => String(a.specificDate).localeCompare(String(b.specificDate)))
+              .map((x) => `${DateTime.fromISO(String(x.specificDate)).toFormat("ccc d LLL")}: ${x.isClosed || !x.startTime || !x.endTime ? "closed" : `${hhmm12(x.startTime)}–${hhmm12(x.endTime)}`}`),
+          };
+        }),
+        note: "Last appointment of the day starts when the visit still ends by closing time (for a 30-minute visit, 30 minutes before closing).",
+      };
+    },
+  },
   {
     write: false,
     declaration: {

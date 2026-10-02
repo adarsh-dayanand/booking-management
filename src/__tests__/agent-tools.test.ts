@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DateTime } from "luxon";
 
 const query = vi.fn();
 const cancelAppointment = vi.fn();
@@ -397,11 +398,12 @@ describe("get_available_slots shows the whole picture, not just a sample", () =>
     generateAvailableSlots.mockResolvedValue([...every5("2099-01-07T09:00:00+05:30", 36), ...every5("2099-01-07T13:00:00+05:30", 43)]);
     const r: any = await executeTool("get_available_slots", args, { ...base, config });
     expect(r.ranges).toEqual([
-      { practitioner: "Doc", date: "2099-01-07", day: "Wed 7 Jan", from: "9:00 AM", to: "11:55 AM" },
-      { practitioner: "Doc", date: "2099-01-07", day: "Wed 7 Jan", from: "1:00 PM", to: "4:30 PM" },
+      { practitioner: "Doc", date: "2099-01-07", day: "Wed 7 Jan", firstStart: "9:00 AM", lastStart: "11:55 AM" },
+      { practitioner: "Doc", date: "2099-01-07", day: "Wed 7 Jan", firstStart: "1:00 PM", lastStart: "4:30 PM" },
     ]);
     expect(r.intervalMinutes).toBe(5);
     expect(r.note).toContain("only a sample");
+    expect(r.note).toContain("NOT the closing time"); // the last START time must not be read as closing time
     expect(r.slots.length).toBeLessThanOrEqual(8); // the sample is small…
     expect(r.slots.map((s: any) => s.local.split(", ")[1])).not.toContain("1:30 PM"); // …so 1:30 PM may not be in it, yet it is inside a range
   });
@@ -409,7 +411,7 @@ describe("get_available_slots shows the whole picture, not just a sample", () =>
   it("splits ranges where times are taken in the middle", async () => {
     generateAvailableSlots.mockResolvedValue([...every5("2099-01-07T09:00:00+05:30", 4), ...every5("2099-01-07T10:00:00+05:30", 3)]);
     const r: any = await executeTool("get_available_slots", args, { ...base, config });
-    expect(r.ranges.map((x: any) => `${x.from}-${x.to}`)).toEqual(["9:00 AM-9:15 AM", "10:00 AM-10:10 AM"]);
+    expect(r.ranges.map((x: any) => `${x.firstStart}-${x.lastStart}`)).toEqual(["9:00 AM-9:15 AM", "10:00 AM-10:10 AM"]);
   });
 
   it("uses the clinic's interval when merging", async () => {
@@ -417,7 +419,7 @@ describe("get_available_slots shows the whole picture, not just a sample", () =>
     generateAvailableSlots.mockResolvedValue(slots);
     const r: any = await executeTool("get_available_slots", args, { ...base, config: { ...config, tenant: { ...config.tenant, slotIntervalMinutes: 20 } } });
     expect(r.ranges).toHaveLength(1);
-    expect(r.ranges[0]).toMatchObject({ from: "9:00 AM", to: "10:00 AM" });
+    expect(r.ranges[0]).toMatchObject({ firstStart: "9:00 AM", lastStart: "10:00 AM" });
   });
 });
 
@@ -488,5 +490,42 @@ describe("an empty day is explained, and the searched range is stated", () => {
     generateAvailableSlots.mockResolvedValue([{ startAt: "2099-01-12T04:00:00.000Z", endAt: "2099-01-12T04:30:00.000Z" }]);
     const r: any = await executeTool("get_available_slots", { serviceId: SERVICE, fromDate: "2099-01-10", toDate: "2099-01-14" }, mk([MONDAY_RULE]));
     expect(r.searched).toEqual({ from: "2099-01-10", to: "2099-01-14" });
+  });
+});
+
+describe("get_opening_hours: real hours, not inferred from free slots", () => {
+  const rule = (weekday: number | null, start: string | null, end: string | null, extra: object = {}) => ({ id: randomId(), tenantId: "t1", resourceId: RESOURCE, weekday, specificDate: null, startTime: start, endTime: end, isClosed: false, ...extra });
+  let n = 0;
+  const randomId = () => `r${n++}`;
+  const withRules = (rules: object[]) => { const c = ctx("whatsapp", "919876543210"); return { ...c, config: { ...c.config, tenant: { ...c.config.tenant, timezone: "Asia/Kolkata" }, availabilityRules: rules as never } }; };
+
+  it("groups days with the same hours and reports the closing time (not the last start)", async () => {
+    const r: any = await executeTool("get_opening_hours", {}, withRules([1, 2, 3, 4, 5].map((d) => rule(d, "09:00:00", "17:00:00")).concat([rule(6, "09:00:00", "13:00:00")])));
+    expect(r.practitioners[0].name).toBe("Doc");
+    expect(r.practitioners[0].weekly).toEqual(["Mon–Fri: 9:00 AM–5:00 PM", "Sat: 9:00 AM–1:00 PM", "Sun: closed"]);
+    expect(r.timezone).toBe("Asia/Kolkata");
+  });
+
+  it("splits a week when the hours differ mid-week", async () => {
+    const r: any = await executeTool("get_opening_hours", {}, withRules([rule(1, "09:00:00", "17:00:00"), rule(2, "09:00:00", "17:00:00"), rule(3, "10:00:00", "14:00:00"), rule(4, "09:00:00", "17:00:00")]));
+    expect(r.practitioners[0].weekly).toEqual(["Mon–Tue: 9:00 AM–5:00 PM", "Wed: 10:00 AM–2:00 PM", "Thu: 9:00 AM–5:00 PM", "Fri–Sun: closed"]);
+  });
+
+  it("lists upcoming holidays and special days but not past ones", async () => {
+    const r: any = await executeTool("get_opening_hours", {}, withRules([
+      rule(1, "09:00:00", "17:00:00"),
+      rule(null, null, null, { specificDate: "2099-12-25", isClosed: true }),
+      rule(null, "10:00:00", "13:00:00", { specificDate: "2020-01-01" }),
+    ]));
+    expect(r.practitioners[0].upcomingChanges).toEqual([]); // 2099 is beyond the 60-day horizon; 2020 is past
+    const soon = DateTime.now().setZone("Asia/Kolkata").plus({ days: 10 }).toISODate()!;
+    const r2: any = await executeTool("get_opening_hours", {}, withRules([rule(null, null, null, { specificDate: soon, isClosed: true })]));
+    expect(r2.practitioners[0].upcomingChanges).toEqual([`${DateTime.fromISO(soon).toFormat("ccc d LLL")}: closed`]);
+  });
+
+  it("omits turned-off practitioners", async () => {
+    const c = withRules([]);
+    const off = { ...c, config: { ...c.config, resources: [{ ...c.config.resources[0], active: false }] } };
+    expect(((await executeTool("get_opening_hours", {}, off)) as any).practitioners).toEqual([]);
   });
 });
