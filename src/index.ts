@@ -6,7 +6,9 @@ import { config } from "./config";
 import { pool } from "./lib/db";
 import { AppError } from "./errors";
 import { openApiSpec } from "./http/openapi";
+import { consultantRouter } from "./http/routes/consultant";
 import { adminRouter } from "./http/routes/admin";
+import { razorpayWebhookRouter } from "./http/routes/razorpayWebhook";
 import { googleAuthRouter } from "./http/routes/googleAuth";
 import { startScheduler } from "./jobs/scheduler";
 import { webChatRouter } from "./http/routes/webChat";
@@ -35,7 +37,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// The embeddable widget snippet + iframe chat UI + the staff dashboard.
+// Old bookmark of the vanilla dashboard -> the React app (built from web/ into public/consultant/).
+app.get("/consultant.html", (_req, res) => res.redirect(301, "/consultant/"));
+// The embeddable widget snippet + iframe chat UI + the consultant dashboard.
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 if (config.docsEnabled) {
@@ -67,9 +71,11 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use("/v1/public", webChatRouter);
+app.use("/v1/consultant", consultantRouter);
 app.use("/v1/admin", adminRouter);
 app.use("/auth/google", googleAuthRouter);
 app.use("/v1/webhooks/whatsapp", whatsappWebhookRouter);
+app.use("/v1/webhooks/razorpay", razorpayWebhookRouter);
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {

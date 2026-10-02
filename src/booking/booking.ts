@@ -5,6 +5,11 @@ import { NotFoundError, SlotConflictError, StaleVersionError, ValidationError } 
 import * as googleCalendar from "../calendar/googleCalendar";
 import { notifyAppointmentEvent, type Actor } from "../channels/notify";
 import { touchPatient } from "./patients";
+import { config as appConfig } from "../config";
+import { paymentActive, quoteFee } from "../payments/pricing";
+import { openPaymentLink, voidUnpaidPayment } from "../payments/checkout";
+import * as payments from "../payments/store";
+import { toOffer, type PaymentOffer } from "../payments/offer";
 import { loadTenantConfigById } from "./tenant";
 import type {
   Appointment,
@@ -119,7 +124,7 @@ export async function generateAvailableSlots(
 
   const existing = await pool.query(
     `SELECT start_at, end_at FROM appointments
-     WHERE tenant_id = $1 AND resource_id = $2 AND status IN ('PENDING_CONFIRMATION', 'CONFIRMED')
+     WHERE tenant_id = $1 AND resource_id = $2 AND status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED')
        AND start_at < $4 AND end_at > $3`,
     [config.tenant.id, resourceId, rangeStart, rangeEnd]
   );
@@ -151,7 +156,7 @@ export type AppointmentAction = "APPROVE" | "REJECT" | "CANCEL" | "RESCHEDULE";
 const TRANSITIONS: Record<AppointmentAction, { from: AppointmentStatus[]; to: AppointmentStatus }> = {
   APPROVE: { from: ["PENDING_CONFIRMATION"], to: "CONFIRMED" },
   REJECT: { from: ["PENDING_CONFIRMATION"], to: "REJECTED" },
-  CANCEL: { from: ["PENDING_CONFIRMATION", "CONFIRMED"], to: "CANCELLED" },
+  CANCEL: { from: ["AWAITING_PAYMENT", "PENDING_CONFIRMATION", "CONFIRMED"], to: "CANCELLED" },
   RESCHEDULE: { from: ["PENDING_CONFIRMATION", "CONFIRMED"], to: "PENDING_CONFIRMATION" },
 };
 
@@ -177,9 +182,11 @@ export interface CreateAppointmentInput {
 export interface CreateAppointmentResult {
   appointmentId: string;
   status: AppointmentStatus;
+  /** Present when the clinic collects payment: the booking stays AWAITING_PAYMENT until this is paid. */
+  payment?: PaymentOffer;
 }
 
-function mapAppointment(row: any): Appointment {
+export function mapAppointment(row: any): Appointment {
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -209,11 +216,22 @@ export async function createAppointment(
 
   const idempotencyKey = input.idempotencyKey ?? randomUUID();
   const endAt = new Date(input.startAt.getTime() + service.durationMinutes * 60_000);
-  const targetStatus: AppointmentStatus =
-    config.tenant.confirmationPolicy === "instant" ? "CONFIRMED" : "PENDING_CONFIRMATION";
+
+  // Payment first, confirmation second: when the clinic collects fees the slot is only HELD (AWAITING_PAYMENT)
+  // until the patient pays; the policy-based status (CONFIRMED / PENDING_CONFIRMATION) applies after that.
+  const quote = paymentActive(config.tenant) ? quoteFee(config.tenant.pricing!, config.tenant.timezone, input.startAt, service) : null;
+  const needsPayment = quote !== null && quote.amountPaise > 0;
+  const credentials = needsPayment ? await payments.loadCredentials(config.tenant.id) : null;
+  if (needsPayment && !credentials) throw new ValidationError("Online payment isn't set up for this clinic yet");
+  const holdExpiresAt = new Date(Date.now() + appConfig.payments.holdMinutes * 60_000);
+
+  const targetStatus: AppointmentStatus = needsPayment
+    ? "AWAITING_PAYMENT"
+    : config.tenant.confirmationPolicy === "instant" ? "CONFIRMED" : "PENDING_CONFIRMATION";
 
   const client = await pool.connect();
   let appointment: Appointment;
+  let patientRow: { name: string; phone: string };
   try {
     await client.query("BEGIN");
 
@@ -224,7 +242,8 @@ export async function createAppointment(
     if (existing.rowCount && existing.rowCount > 0) {
       await client.query("COMMIT");
       const row = existing.rows[0];
-      return { appointmentId: row.id, status: row.status };
+      const pending = row.status === "AWAITING_PAYMENT" ? await payments.getByAppointment(config.tenant.id, row.id) : null;
+      return { appointmentId: row.id, status: row.status, ...(pending?.linkUrl ? { payment: toOffer(pending) } : {}) };
     }
 
     // No registration step: the patient profile is keyed by phone number and reused across bookings.
@@ -234,6 +253,7 @@ export async function createAppointment(
       { channel: input.channel, name: input.patient.name, nameSource: "patient", verified: input.phoneVerified },
       client
     );
+    patientRow = { name: input.patient.name.trim(), phone: patient.phone };
     if (input.patient.email) {
       await client.query("UPDATE patients SET email = COALESCE(email, $2) WHERE id = $1", [patient.id, input.patient.email]);
     }
@@ -256,15 +276,37 @@ export async function createAppointment(
         input.patient.name.trim(),
       ]
     );
+    appointment = mapAppointment(appointmentResult.rows[0]);
+
+    if (needsPayment) {
+      await payments.insertPayment(client, {
+        tenantId: config.tenant.id,
+        appointmentId: appointment.id,
+        amountPaise: quote!.amountPaise,
+        band: quote!.band,
+        expiresAt: holdExpiresAt,
+      });
+    }
 
     await client.query("COMMIT");
-    appointment = mapAppointment(appointmentResult.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");
     if (isPgError(err, EXCLUSION_VIOLATION)) throw new SlotConflictError();
     throw err;
   } finally {
     client.release();
+  }
+
+  if (needsPayment) {
+    // Nothing is calendar-synced or sent to the doctor yet: that happens when the payment lands (payments/settlement.ts).
+    const payment = await openPaymentLink(credentials!, {
+      appointmentId: appointment.id,
+      amountPaise: quote!.amountPaise,
+      description: `${service.name} with ${resource.name} at ${config.tenant.name}`,
+      expiresAt: holdExpiresAt,
+      patient: patientRow!,
+    });
+    return { appointmentId: appointment.id, status: "AWAITING_PAYMENT", payment };
   }
 
   await syncToCalendar(resource, appointment, "create");
@@ -343,6 +385,7 @@ export async function cancelAppointment(
   const appointment = await transition(config, appointmentId, "CANCEL", "cancel_reason", reason);
   const resource = findResource(config, appointment.resourceId);
   await syncToCalendar(resource, appointment, "cancel");
+  await voidUnpaidPayment(config.tenant.id, appointment.id);
   await notifyAppointmentEvent(appointment.id, "cancelled", actor);
   return appointment;
 }
@@ -443,7 +486,7 @@ export async function retryFailedSyncs(limit = 25): Promise<number> {
 // Calendar sync (fail-soft: never throws, always records the outcome)
 // ---------------------------------------------------------------------------
 
-async function syncToCalendar(
+export async function syncToCalendar(
   resource: Resource,
   appointment: Appointment,
   action: "create" | "update" | "cancel"

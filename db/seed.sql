@@ -1,5 +1,5 @@
 -- Demo data for local development. Safe to re-run (guards against duplicate inserts).
--- Apply with: psql "$DATABASE_URL" -f db/seed.sql
+-- Apply with: npm run db:seed  (or psql "$DATABASE_URL" -f db/seed.sql)
 --
 -- Creates: one tenant ("demo-clinic"), one staff login, one service, one
 -- practitioner resource (Mon-Fri 09:00-17:00), and one staff login you can

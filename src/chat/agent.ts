@@ -4,6 +4,9 @@ import { loadConversation, saveConversation, withConversationLock } from "./conv
 import { generate, generateStream, GeminiError, type GeminiContent } from "./gemini";
 import type { ChatResponse } from "./guidedFlow";
 import { getPatientByPhone, type Patient } from "../booking/patients";
+import { appendPaymentLink } from "../payments/offer";
+import { config as appConfig } from "../config";
+import { paymentActive } from "../payments/pricing";
 import type { Channel, TenantConfig } from "../types";
 
 const MAX_HISTORY = 24;
@@ -53,11 +56,14 @@ export function buildSystemPrompt(config: TenantConfig, now: DateTime = DateTime
     tenant.confirmationPolicy === "instant"
       ? "BOOKING FLOW = direct booking. Times you can offer are free on the doctor's calendar. Once you book, the appointment is CONFIRMED immediately and the slot is blocked on the calendar."
       : "BOOKING FLOW = doctor approval. A booking is only a REQUEST until the doctor explicitly accepts it (the slot is held meanwhile). After booking, say it is awaiting the doctor's acceptance and that they will be messaged on WhatsApp when it is accepted or declined. Never say it is confirmed unless a tool reports status CONFIRMED.";
+  const payments = paymentActive(tenant)
+    ? `\nPAYMENTS: this clinic collects the consultation fee online BEFORE a booking is confirmed. Slots from get_available_slots carry a fee; state it when you restate the details and ask for the patient's yes. After book_appointment returns status AWAITING_PAYMENT the booking is NOT confirmed: give the patient the amount and the paymentUrl from the tool result, say the time is held for ${appConfig.payments.holdMinutes} minutes, and that it is confirmed only once they pay (they will be told here and on WhatsApp). Never say "booked", "confirmed" or "requested" before payment is complete. If they say they've paid or ask about payment, call check_payment_status. An unpaid hold can't be rescheduled; cancel it and book again. Only ever share a payment link that a tool returned.\n`
+    : "";
   return `You are the appointment assistant for ${tenant.name}, chatting with patients on WhatsApp or the clinic's website.
 Today is ${local.toFormat("cccc, dd LLLL yyyy, HH:mm")} (${tenant.timezone}). Resolve relative dates ("next Tuesday", "tomorrow evening") against this.
 
 ${flow}
-
+${payments}
 The patient: ${describePatient(who) || "unknown."}
 
 What you do: book, check, reschedule and cancel appointments, and answer basic clinic questions.
@@ -188,13 +194,15 @@ export async function handleAgentMessage(
         claimedPhone: session.claimedPhone,
       } satisfies StoredAgentState);
 
+    const outbox: NonNullable<ToolContext["outbox"]> = {};
     try {
       const provenPhone = channel === "whatsapp" ? externalId : session.verifiedPhone;
       const patient = provenPhone ? await getPatientByPhone(tenantId, provenPhone).catch(() => null) : null;
       const who: PatientContext = { channel, patient, verified: Boolean(provenPhone), claimedPhone: session.claimedPhone };
-      const { text } = await runTurn(config, { config, channel, externalId, session }, history, userText, { ...options, who });
+      const { text } = await runTurn(config, { config, channel, externalId, session, outbox }, history, userText, { ...options, who });
       await save([...history, { role: "user", parts: [{ text: userText }] }, { role: "model", parts: [{ text }] }]);
-      return { replyText: text };
+      // WhatsApp has no buttons, so the link must be in the text; the web widget renders `payment` as a Pay button.
+      return { replyText: channel === "whatsapp" ? appendPaymentLink(text, outbox.payment) : text, ...(outbox.payment ? { payment: outbox.payment } : {}) };
     } catch (err) {
       console.error(`[agent] turn failed for ${tenantId}/${channel}:`, err);
       options.onEvent?.({ type: "error", message: err instanceof Error ? err.message : String(err) });
@@ -202,6 +210,10 @@ export async function handleAgentMessage(
         // An action already happened; remember that so the next turn doesn't repeat it.
         const note = "(An action was completed for the patient but my reply failed to send; ask them to check their appointments.)";
         await save([...history, { role: "user", parts: [{ text: userText }] }, { role: "model", parts: [{ text: note }] }]);
+        if (outbox.payment) {
+          const text = `Your time is held for you. Please pay ${outbox.payment.amount} to confirm your booking; it is not confirmed until you do.`;
+          return { replyText: channel === "whatsapp" ? appendPaymentLink(text, outbox.payment) : text, payment: outbox.payment };
+        }
         return { replyText: "Your request went through, but I had trouble writing my reply. Please send \"my appointments\" to check the details." };
       }
       return { replyText: "Sorry, I'm having trouble right now. Please try again in a moment, or contact the clinic directly." };

@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import { pool } from "../lib/db";
 import * as whatsapp from "./whatsapp";
 
-export type AppointmentEvent = "created" | "approved" | "rejected" | "cancelled" | "rescheduled" | "reminder";
+export type AppointmentEvent = "created" | "paid" | "payment_expired" | "approved" | "rejected" | "cancelled" | "rescheduled" | "reminder";
 /** Who caused the event. The actor is never messaged about their own action. */
 export type Actor = "patient" | "staff" | "calendar" | "system";
 
@@ -32,6 +32,12 @@ export function patientMessage(event: AppointmentEvent, actor: Actor, c: NotifyC
       return pending
         ? `Hi ${c.patientName}, we've received your appointment request at ${c.clinicName}. The doctor will confirm it shortly.\n${detail}`
         : `Hi ${c.patientName}, your appointment at ${c.clinicName} is confirmed.\n${detail}`;
+    case "paid":
+      return pending
+        ? `Payment received, ${c.patientName}. Thank you! Your request at ${c.clinicName} is now with the doctor, who will confirm it shortly.\n${detail}`
+        : `Payment received, ${c.patientName}. Thank you! Your appointment at ${c.clinicName} is confirmed.\n${detail}`;
+    case "payment_expired":
+      return `Hi ${c.patientName}, we didn't receive the payment for your appointment at ${c.clinicName} in time, so the time slot has been released.\nMessage us here whenever you'd like to book again.\n${detail}`;
     case "approved":
       return `Good news ${c.patientName}: the doctor has confirmed your appointment at ${c.clinicName}.\n${detail}`;
     case "rejected":
@@ -55,6 +61,8 @@ export function staffMessage(event: AppointmentEvent, actor: Actor, c: NotifyCon
   switch (event) {
     case "created":
       return pending ? `New appointment request:\n${detail}${decide}` : `New booking (auto-confirmed):\n${detail}`;
+    case "paid":
+      return pending ? `New appointment request (already paid):\n${detail}${decide}` : `New booking (paid, auto-confirmed):\n${detail}`;
     case "rescheduled":
       return pending ? `Patient moved their appointment — needs your acceptance again:\n${detail}${decide}` : `Patient rescheduled:\n${detail}`;
     case "cancelled":

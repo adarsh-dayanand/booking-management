@@ -1,5 +1,5 @@
 -- Booking Management Bot — POC schema.
--- Apply once with: psql "$DATABASE_URL" -f db/schema.sql
+-- Apply with: npm run db:setup  (or psql "$DATABASE_URL" -f db/schema.sql)
 -- No migration framework here (POC scope) — before production, replace this
 -- with real versioned migrations (e.g. node-pg-migrate).
 
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS appointments (
   start_at timestamptz NOT NULL,
   end_at timestamptz NOT NULL,
   status text NOT NULL CHECK (status IN
-    ('PENDING_CONFIRMATION', 'CONFIRMED', 'REJECTED', 'CANCELLED', 'COMPLETED')),
+    ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED', 'REJECTED', 'CANCELLED', 'COMPLETED')),
   channel text NOT NULL CHECK (channel IN ('web', 'whatsapp')),
   idempotency_key text NOT NULL,
   cancel_reason text,
@@ -99,13 +99,13 @@ CREATE TABLE IF NOT EXISTS appointments (
 );
 
 -- The invariant that makes double-booking impossible at the database level,
--- independent of any application-level locking: two PENDING_CONFIRMATION/CONFIRMED
+-- independent of any application-level locking: two AWAITING_PAYMENT/PENDING_CONFIRMATION/CONFIRMED
 -- appointments for the same tenant+resource can never have overlapping time ranges.
 ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_no_overlap;
 ALTER TABLE appointments
   ADD CONSTRAINT appointments_no_overlap
   EXCLUDE USING gist (tenant_id WITH =, resource_id WITH =, time_range WITH &&)
-  WHERE (status IN ('PENDING_CONFIRMATION', 'CONFIRMED'));
+  WHERE (status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED'));
 
 CREATE INDEX IF NOT EXISTS appointments_tenant_status_idx ON appointments (tenant_id, status);
 
@@ -195,3 +195,43 @@ CREATE TABLE IF NOT EXISTS phone_otps (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS phone_otps_lookup_idx ON phone_otps (tenant_id, phone_normalized, created_at DESC);
+
+
+-- ---------------------------------------------------------------------------
+-- Payments (Razorpay). Off unless the PLATFORM admin enables it for a clinic and stores that clinic's
+-- Razorpay credentials; the clinic then chooses whether to collect and sets its consultation fees.
+-- ---------------------------------------------------------------------------
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payments_enabled boolean NOT NULL DEFAULT false;   -- set by the platform admin only
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS razorpay_key_id text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS razorpay_key_secret_encrypted text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS razorpay_webhook_secret_encrypted text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS collect_payments boolean NOT NULL DEFAULT false;   -- clinic's switch (needs payments_enabled)
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS consultation_pricing jsonb;                        -- see src/payments/pricing.ts
+
+-- Existing databases: widen the status list and let an unpaid hold block the slot like any other booking.
+ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_status_check;
+ALTER TABLE appointments ADD CONSTRAINT appointments_status_check CHECK (status IN
+  ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED', 'REJECTED', 'CANCELLED', 'COMPLETED'));
+ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_no_overlap;
+ALTER TABLE appointments
+  ADD CONSTRAINT appointments_no_overlap
+  EXCLUDE USING gist (tenant_id WITH =, resource_id WITH =, time_range WITH &&)
+  WHERE (status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED'));
+
+CREATE TABLE IF NOT EXISTS payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL REFERENCES tenants(id),
+  appointment_id uuid NOT NULL UNIQUE REFERENCES appointments(id),
+  amount_paise int NOT NULL CHECK (amount_paise > 0),
+  currency text NOT NULL DEFAULT 'INR',
+  band text NOT NULL,                              -- which rate applied: flat | weekday | weekend | night
+  status text NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'paid', 'expired', 'failed', 'cancelled')),
+  razorpay_payment_link_id text UNIQUE,
+  razorpay_payment_link_url text,
+  razorpay_payment_id text,
+  expires_at timestamptz NOT NULL,                 -- the slot hold and the payment link both lapse here
+  paid_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS payments_tenant_idx ON payments (tenant_id, status);

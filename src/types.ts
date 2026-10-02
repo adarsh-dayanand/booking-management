@@ -1,5 +1,5 @@
 export type ConfirmationPolicy = "instant" | "staff_approval";
-export type AppointmentStatus = "PENDING_CONFIRMATION" | "CONFIRMED" | "REJECTED" | "CANCELLED" | "COMPLETED";
+export type AppointmentStatus = "AWAITING_PAYMENT" | "PENDING_CONFIRMATION" | "CONFIRMED" | "REJECTED" | "CANCELLED" | "COMPLETED";
 export type Channel = "web" | "whatsapp";
 export type GoogleConnectionStatus = "disconnected" | "connected" | "error";
 export type CalendarSyncStatus = "pending" | "synced" | "failed" | "skipped";
@@ -14,7 +14,24 @@ export interface Tenant {
   staffWhatsappNumber: string | null;
   reminderHoursBefore: number;
   faqText: string | null;
+  /** Set by the admin (with Razorpay credentials). Without it the consultant can't collect payments at all. */
+  paymentsEnabled: boolean;
+  /** The consultant's own switch: when true (and paymentsEnabled), bookings must be paid before they are confirmed. */
+  collectPayments: boolean;
+  pricing: ConsultationPricing | null;
 }
+
+/** Rates are rupees per hour; a service's fee is the rate prorated by its duration. */
+export type ConsultationPricing =
+  | { mode: "flat"; hourlyRate: number }
+  | {
+      mode: "variable";
+      weekdayRate: number;
+      weekendRate: number; // Saturday and Sunday
+      nightRate: number; // overrides the weekday/weekend rate inside the night window
+      nightStart: string; // "HH:MM", local clinic time
+      nightEnd: string; // "HH:MM"; earlier than nightStart means the window crosses midnight
+    };
 
 export interface Service {
   id: string;

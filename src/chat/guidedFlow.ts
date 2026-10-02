@@ -3,6 +3,9 @@ import { loadConversation, saveConversation } from "./conversationStore";
 import { loadTenantConfig } from "../booking/tenant";
 import * as booking from "../booking/booking";
 import { SlotConflictError } from "../errors";
+import { appendPaymentLink, type PaymentOffer } from "../payments/offer";
+import { config as appConfig } from "../config";
+import { formatRupees, paymentActive, quoteFee } from "../payments/pricing";
 import type { Channel, Slot, Tenant, TenantConfig } from "../types";
 
 type Step =
@@ -34,6 +37,8 @@ export interface ChatResponse {
   options?: ChatOption[];
   appointmentId?: string;
   appointmentStatus?: string;
+  /** The patient still has to pay: the web widget shows a Pay button; WhatsApp gets the link in replyText. */
+  payment?: PaymentOffer;
 }
 
 /**
@@ -228,8 +233,11 @@ async function onPhoneProvided(
   const service = config.services.find((s) => s.id === state.serviceId)!;
   const slotLabel = formatSlotLabel(state.selectedSlot!, config.tenant.timezone);
   await saveState(config.tenant.id, channel, externalId, { ...state, step: "AWAITING_CONFIRMATION", patientPhone: phone });
+  const fee = paymentActive(config.tenant)
+    ? ` Fee: ${formatRupees(quoteFee(config.tenant.pricing!, config.tenant.timezone, new Date(state.selectedSlot!.startAt), service).amountPaise)}, payable online to confirm.`
+    : "";
   return {
-    replyText: `Please confirm: ${service.name} on ${slotLabel}.`,
+    replyText: `Please confirm: ${service.name} on ${slotLabel}.${fee}`,
     options: [
       { id: "yes", label: "1. Yes, book it" },
       { id: "no", label: "2. No, start over" },
@@ -262,6 +270,15 @@ async function onConfirmation(
       channel,
     });
     await saveState(config.tenant.id, channel, externalId, { step: "DONE" });
+    if (result.payment) {
+      const text = `Almost done! Please pay ${result.payment.amount} to confirm your appointment. The time is held for you for ${appConfig.payments.holdMinutes} minutes.`;
+      return {
+        replyText: channel === "whatsapp" ? appendPaymentLink(text, result.payment) : text,
+        payment: result.payment,
+        appointmentId: result.appointmentId,
+        appointmentStatus: result.status,
+      };
+    }
     const statusText = result.status === "CONFIRMED" ? "confirmed" : "received and is awaiting confirmation from our staff";
     return {
       replyText: `Thank you! Your appointment request has been ${statusText}. We'll be in touch if anything changes.`,

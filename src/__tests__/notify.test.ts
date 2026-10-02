@@ -51,3 +51,19 @@ describe("who gets told about what", () => {
     expect(patientMessage("rescheduled", "calendar", base)).toContain("moved to a new time");
   });
 });
+
+describe("payment messages", () => {
+  it("tells the patient the payment landed — even on WhatsApp, where it arrives after the chat turn ended", () => {
+    const wa = { ...base, channel: "whatsapp" };
+    expect(patientMessage("paid", "patient", { ...wa, status: "CONFIRMED" })).toContain("is confirmed");
+    expect(patientMessage("paid", "patient", wa)).toContain("with the doctor");
+  });
+  it("asks the doctor to decide only once the booking is paid", () => {
+    expect(staffMessage("paid", "patient", base)).toContain("APPROVE a1b2c3");
+    expect(staffMessage("paid", "patient", { ...base, status: "CONFIRMED" })).not.toContain("APPROVE");
+  });
+  it("tells the patient when an unpaid slot is released, and never bothers the doctor", () => {
+    expect(patientMessage("payment_expired", "system", base)).toContain("released");
+    expect(staffMessage("payment_expired", "system", base)).toBeNull();
+  });
+});

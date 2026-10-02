@@ -42,6 +42,13 @@ export const config = {
   docsEnabled: process.env.ENABLE_DOCS ? process.env.ENABLE_DOCS === "1" : process.env.NODE_ENV !== "production",
   schedulerEnabled: process.env.DISABLE_SCHEDULER !== "1" && process.env.NODE_ENV !== "test",
   schedulerIntervalMs: Number(process.env.SCHEDULER_INTERVAL_MS || 5 * 60_000),
+  // Admin's (platform operator's) secret for /v1/admin/* (enable payments + store Razorpay keys per consultant). Unset = that API is off.
+  adminToken: optional("ADMIN_TOKEN"),
+  payments: {
+    apiBase: process.env.RAZORPAY_API_BASE || "https://api.razorpay.com/v1",
+    // How long an unpaid slot is held. Razorpay requires payment links to live at least 15 minutes.
+    holdMinutes: Math.max(16, Number(process.env.PAYMENT_HOLD_MINUTES || 20)),
+  },
   gemini: {
     apiKey: optional("GEMINI_API_KEY"),
     model: optional("GEMINI_MODEL"),

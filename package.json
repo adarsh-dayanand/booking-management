@@ -9,9 +9,13 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "db:setup": "psql \"$DATABASE_URL\" -f db/schema.sql",
-    "db:seed": "psql \"$DATABASE_URL\" -f db/seed.sql",
-    "db:setup:test": "psql \"$DATABASE_URL_TEST\" -f db/schema.sql"
+    "db:setup": "node scripts/apply-sql.js db/schema.sql",
+    "db:seed": "node scripts/apply-sql.js db/seed.sql",
+    "db:setup:test": "node scripts/apply-sql.js db/schema.sql DATABASE_URL_TEST",
+    "dev:web": "npm run dev -w web",
+    "build:web": "npm run build -w web",
+    "build:all": "npm run build && npm run build:web",
+    "test:web": "npm test -w web"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -35,5 +39,8 @@
     "tsx": "^4.19.1",
     "typescript": "^5.6.3",
     "vitest": "^2.1.2"
-  }
+  },
+  "workspaces": [
+    "web"
+  ]
 }

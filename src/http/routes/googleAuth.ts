@@ -15,7 +15,7 @@ googleAuthRouter.get("/connect", requireAuth, async (req, res, next) => {
 
     const result = await pool.query("SELECT id FROM resources WHERE id = $1 AND tenant_id = $2", [
       resourceId,
-      req.staff!.tenantId,
+      req.consultant!.tenantId,
     ]);
     if (result.rowCount === 0) throw new NotFoundError("Resource not found");
 

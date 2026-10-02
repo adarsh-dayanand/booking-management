@@ -3,6 +3,7 @@ import { pollCalendarChanges } from "../calendar/calendarPoll";
 import { config } from "../config";
 import { pool } from "../lib/db";
 import { notifyAppointmentEvent } from "../channels/notify";
+import { expireUnpaidHolds } from "../payments/settlement";
 
 let running = false;
 
@@ -30,6 +31,7 @@ export async function runSchedulerOnce(): Promise<void> {
   const steps: [string, () => Promise<unknown>][] = [
     ["calendar poll", pollCalendarChanges],
     ["calendar sync retry", () => booking.retryFailedSyncs()],
+    ["unpaid slot holds", expireUnpaidHolds],
     ["reminders", sendDueReminders],
     ["dedupe cleanup", () => pool.query("DELETE FROM processed_messages WHERE created_at < now() - interval '7 days'")],
   ];

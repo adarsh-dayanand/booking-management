@@ -12,6 +12,9 @@ import { loadConversation, saveConversation, withConversationLock } from "../../
 import { sendPhoneOtp, verifyPhoneOtp } from "../../channels/phoneOtp";
 import { allow, rateLimit } from "../../lib/rateLimit";
 import { loadTenantConfig } from "../../booking/tenant";
+import { describeOutcome } from "../../payments/offer";
+import { reconcileAppointment } from "../../payments/settlement";
+import { NotFoundError } from "../../errors";
 
 export const webChatRouter = Router();
 
@@ -127,6 +130,21 @@ webChatRouter.delete("/:tenantSlug/chat/sessions/:sessionId", async (req, res, n
       req.params.sessionId,
     ]);
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /v1/public/:tenantSlug/chat/payments/:appointmentId — the widget polls this after showing a Pay button.
+// It asks Razorpay directly (so it works without webhooks) and confirms the booking the moment the payment is seen.
+// The appointment id is an unguessable uuid and the response reveals only the payment outcome.
+webChatRouter.get("/:tenantSlug/chat/payments/:appointmentId", rateLimit("pay-status", 240, 10 * 60_000), async (req, res, next) => {
+  try {
+    if (!/^[0-9a-f-]{36}$/i.test(req.params.appointmentId)) throw new ValidationError("invalid appointment id");
+    const tenantConfig = await loadTenantConfig(req.params.tenantSlug);
+    const state = await reconcileAppointment(tenantConfig.tenant.id, req.params.appointmentId);
+    if (!state) throw new NotFoundError("No payment for that appointment");
+    res.json({ ...state, message: describeOutcome(state) });
   } catch (err) {
     next(err);
   }

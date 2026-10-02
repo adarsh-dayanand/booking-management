@@ -88,7 +88,7 @@ resource with Mon–Fri 09:00–17:00 hours, and a staff login:
 npm run dev
 ```
 
-- Staff dashboard: http://localhost:4000/admin.html
+- Consultant dashboard: http://localhost:4000/consultant/
 - Health check: http://localhost:4000/health
 
 To try the patient-facing chat widget, create a throwaway local HTML file
@@ -103,8 +103,19 @@ To try the patient-facing chat widget, create a throwaway local HTML file
 ```
 
 Open it in a browser, click the chat bubble in the bottom-right corner, and
-book an appointment. It'll show up in the staff dashboard for approval
+book an appointment. It'll show up in the consultant dashboard for approval
 (the demo tenant uses `staff_approval` policy).
+
+### The consultant dashboard (React)
+
+The dashboard lives in [`web/`](web/) (React + TypeScript + Vite, an npm workspace, so `npm install` at the root covers it). The API server serves its build at **`/consultant/`**:
+
+```bash
+npm run build:all   # server (tsc) + dashboard (Vite -> public/consultant/)
+npm start           # then open http://localhost:4000/consultant/
+```
+
+While working on the UI, run the API (`npm run dev`) and `npm run dev:web` side by side; Vite serves the dashboard on http://localhost:5173/consultant/ and proxies `/v1` to the API (set `API_URL` if the API isn't on port 4000). The old `/consultant.html` redirects to `/consultant/`.
 
 ## 6. Run tests
 
@@ -115,7 +126,7 @@ npm test
 This runs the pure unit tests (slot generation, state machine — no DB needed)
 plus the concurrency integration test (needs `DATABASE_URL_TEST` set up per
 step 4 above) that proves two simultaneous bookings for the same time slot
-can't both succeed.
+can't both succeed. `npm run test:web` runs the React dashboard's tests (jsdom, no server needed).
 
 ## Swagger UI: try the agent and watch what it does
 
@@ -128,7 +139,7 @@ can't both succeed.
     In a stream these arrive as `tool_call` / `tool_result` / `model_text` events. Swagger UI buffers SSE, so it shows the full
     ordered log when the turn ends; use `curl -N` to watch live.
 - **`GET …/agent/info`** — the exact system prompt and tool definitions for the clinic.
-- Try both flows: `POST /v1/admin/login` → **Authorize** → `PUT /v1/admin/settings` (`instant` vs `staff_approval`) → book via chat → approve under *admin*.
+- Try both flows: `POST /v1/consultant/login` → **Authorize** → `PUT /v1/consultant/settings` (`instant` vs `staff_approval`) → book via chat → approve under *consultant*.
 
 Docs and trace are on by default outside production; in production set `ENABLE_DOCS=1` / `AGENT_TRACE=1` to expose them.
 
@@ -149,8 +160,8 @@ query in the same turn:
 - With WhatsApp not configured (local dev) the code is returned as `devCode` so the flow can be tried in Swagger. This
   only happens when `AGENT_TRACE` is on (the default outside production) — keep it off in production.
 - Each booking keeps the name it was made under (`appointments.patient_name`), so booking for a family member on a shared
-  phone doesn't rename the profile. Staff can look patients up with `GET /v1/admin/patients?phone=…` and
-  `GET /v1/admin/patients/{id}`.
+  phone doesn't rename the profile. Consultants can look their users up with `GET /v1/consultant/users?phone=…` and
+  `GET /v1/consultant/users/{id}`.
 
 ## The agent and the two booking flows
 
@@ -161,7 +172,7 @@ the only code that changes appointments. The tools re-check every slot against c
 bookings and the doctor's live Google free/busy before booking, so a model-invented time is refused.
 Without a key, the old numbered-menu flow runs (book only; responses say `mode: "guided"`).
 
-Each clinic picks one of two flows (`confirmationPolicy`, via `PUT /v1/admin/settings`):
+Each clinic picks one of two flows (`confirmationPolicy`, via `PUT /v1/consultant/settings`):
 
 | | `instant` — direct booking | `staff_approval` — doctor accepts |
 |---|---|---|
@@ -170,7 +181,7 @@ Each clinic picks one of two flows (`confirmationPolicy`, via `PUT /v1/admin/set
 | Doctor | Gets an FYI WhatsApp message | Gets a request and replies `APPROVE <ref>` or `REJECT <ref> <reason>` |
 | Patient | Told it is confirmed | Told it is awaiting the doctor; messaged when accepted/declined |
 
-Settings: `GET/PUT /v1/admin/settings` (`confirmationPolicy`, `staffWhatsappNumber`, `reminderHoursBefore`
+Settings: `GET/PUT /v1/consultant/settings` (`confirmationPolicy`, `staffWhatsappNumber`, `reminderHoursBefore`
 (0 = off), `faqText`, `whatsappPhoneNumberId`). Patients can cancel/reschedule in chat; on WhatsApp their number
 is the identity, on web they give their phone + the 6-character booking reference.
 
@@ -193,7 +204,7 @@ one-row-per-booking model created, by phone number.
 2. Add `http://localhost:4000/auth/google/callback` as an authorized redirect URI.
 3. Put the client ID/secret into `.env` as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
 4. Restart the server, then have the doctor send `CONNECT` from the staff WhatsApp number (or call
-   `GET /v1/admin/resources/<id>/connect-link` with your bearer token) and open the link.
+   `GET /v1/consultant/resources/<id>/connect-link` with your bearer token) and open the link.
 5. Approve the consent screen. Future bookings for that resource will now
    check real Google Calendar busy time and create real events.
 
@@ -222,6 +233,37 @@ one-row-per-booking model created, by phone number.
 7. Message the test number from WhatsApp — you should get the same guided
    booking flow as the web widget.
 
+## Who is who
+
+| Role | Who | API | UI |
+|---|---|---|---|
+| **Admin** | The platform operator | `/v1/admin/*`, authenticated with `ADMIN_TOKEN` | Swagger (`/docs`) |
+| **Consultant** | A clinic or any similar appointment-based place, and its team | `/v1/consultant/*`, JWT from `POST /v1/consultant/login` | Dashboard at `/consultant/` |
+| **User** | The end user who chats and books, on the web widget or WhatsApp | `/v1/public/*` (no login; identified by phone number) | Chat widget |
+
+## Payments (Razorpay)
+
+Off by default, and off for a consultant until the **admin** turns it on for that consultant:
+
+1. Set `ADMIN_TOKEN` in `.env` (any long random string) and restart.
+2. **Admin** stores the consultant's Razorpay keys (verified against Razorpay, encrypted at rest with `CRYPTO_KEY`):
+   ```bash
+   curl -X PUT localhost:4000/v1/admin/tenants/demo-clinic/payments \
+     -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' \
+     -d '{"enabled":true,"razorpayKeyId":"rzp_test_...","razorpayKeySecret":"...","razorpayWebhookSecret":"..."}'
+   ```
+   The response contains a `webhookUrl`; register it in the consultant's Razorpay dashboard (Settings → Webhooks) for the `payment_link.paid` event, using the same webhook secret.
+3. **The consultant** sets their fees in the dashboard ("Consultation fees") or via `PUT /v1/consultant/payments`:
+   - `flat` — one hourly rate at all times.
+   - `variable` — separate hourly rates for weekdays (Mon–Fri), weekends (Sat–Sun) and nights (default 20:00–06:00, crossing midnight; night overrides weekday/weekend).
+
+   Rates are **₹ per hour, prorated by the service's duration** (₹1000/hr → a 30-minute consultation costs ₹500). The appointment's **start time**, in the clinic's timezone, picks the rate. `GET /v1/consultant/payments/quote` shows what any slot would cost.
+4. From then on, booking in the chat only **holds** the slot (`AWAITING_PAYMENT`, blocking double-booking like any booking) and sends a Razorpay payment link: a **Pay** button in the web widget, a link in the message on WhatsApp. Payment then confirms the booking (instant clinics) or sends it to the doctor (approval clinics). Staff only see a request after it's paid. Unpaid holds are released after `PAYMENT_HOLD_MINUTES` (default 20) by the scheduler.
+
+Payments are confirmed by the webhook, and also by polling Razorpay (the widget polls, the agent has a `check_payment_status` tool, the scheduler sweeps stale holds), so a missed webhook doesn't strand a paid booking.
+
+**Not handled yet:** refunds. If the doctor rejects or a clinic cancels a paid booking, refund it in the Razorpay dashboard. A payment that lands for a booking that was already released is recorded and the clinic is alerted on WhatsApp to refund it.
+
 ## Adding a second clinic
 
 No code changes needed:
@@ -246,15 +288,19 @@ src/
   types.ts, errors.ts   shared types and error classes
   lib/              db pool, crypto, phone normalisation, rate limiting
   booking/          booking.ts (slot generation, conflict-safe create/reschedule, state machine), tenant.ts
+  payments/         pricing.ts (flat / weekday-weekend-night fees), razorpay.ts (Payment Links client), store.ts,
+                    checkout.ts (create/void links), settlement.ts (confirm on payment, reconcile, expire holds), offer.ts
   calendar/         googleCalendar.ts (OAuth, freebusy, event sync), calendarPoll.ts (inbound changes)
   channels/         whatsapp.ts (Cloud API + signature check), notify.ts, staffCommands.ts
-  chat/             guidedFlow.ts (deterministic menu), agent.ts + agentTools.ts (Gemini tool loop),
+  chat/             guidedFlow.ts (deterministic menu), agent.ts + agentTools.ts + paymentTools.ts + toolKit.ts (Gemini tool loop),
                     gemini.ts, conversation.ts (dispatcher), conversationStore.ts
-  http/             auth.ts (JWT + requireAuth), openapi.ts, routes/ (thin Express handlers)
+  http/             auth.ts (consultant JWT + requireAuth), openapi.ts, routes/ (thin Express handlers:
+                    admin.ts, consultant.ts, consultantPayments.ts, webChat.ts for users, webhooks)
   jobs/             scheduler.ts (reminders, calendar polling, sync retry)
   __tests__/        vitest suites
+web/                      React + TypeScript consultant dashboard (Vite). Builds into public/consultant/
 public/
   widget.js               the embeddable snippet clinics paste into their own site
   widget/chat.html, chat.js, style.css   the chat UI, served in an iframe from this server
-  admin.html, admin.js    staff dashboard
+  consultant/             (build output of web/, gitignored)
 ```

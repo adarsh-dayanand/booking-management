@@ -15,7 +15,7 @@ import type { TenantConfig } from "../types";
 const config = (policy: "instant" | "staff_approval"): TenantConfig => ({
   tenant: {
     id: "t1", name: "Demo Clinic", slug: "demo", timezone: "Asia/Kolkata", confirmationPolicy: policy,
-    whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: "Open Mon-Fri 9-5.",
+    whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: "Open Mon-Fri 9-5.", paymentsEnabled: false, collectPayments: false, pricing: null,
   },
   services: [], resources: [], availabilityRules: [],
 });
@@ -36,6 +36,16 @@ describe("system prompt reflects the configured flow", () => {
     const p = buildSystemPrompt(config("staff_approval"));
     expect(p).toContain("explicitly accepts");
     expect(p).toContain("Never say it is confirmed");
+  });
+  it("mentions payments only when the clinic actually collects them", () => {
+    const off = buildSystemPrompt(config("instant"));
+    expect(off).not.toContain("PAYMENTS");
+    const c = config("instant");
+    const on = buildSystemPrompt({ ...c, tenant: { ...c.tenant, paymentsEnabled: true, collectPayments: true, pricing: { mode: "flat", hourlyRate: 500 } } });
+    expect(on).toContain("PAYMENTS");
+    expect(on).toContain("AWAITING_PAYMENT");
+    const platformOff = buildSystemPrompt({ ...c, tenant: { ...c.tenant, paymentsEnabled: false, collectPayments: true, pricing: { mode: "flat", hourlyRate: 500 } } });
+    expect(platformOff).not.toContain("PAYMENTS");
   });
   it("includes clinic FAQ text", () => {
     expect(buildSystemPrompt(config("instant"))).toContain("Open Mon-Fri 9-5.");

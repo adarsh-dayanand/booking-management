@@ -25,7 +25,7 @@ function oauthClient() {
   return new google.auth.OAuth2(config.google.clientId, config.google.clientSecret, config.google.redirectUri);
 }
 
-/** Self-serve link a doctor can open (sent over WhatsApp or from the admin API) to connect their calendar. */
+/** Self-serve link a doctor can open (sent over WhatsApp or from the consultant API) to connect their calendar. */
 export function createConnectLink(resourceId: string, tenantId: string): string {
   const token = signPurposeToken("gcal-connect", { resourceId, tenantId }, 20 * 60);
   return `${config.baseUrl}/auth/google/start?token=${encodeURIComponent(token)}`;

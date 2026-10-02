@@ -13,6 +13,9 @@ export function mapTenant(row: any): Tenant {
     staffWhatsappNumber: row.staff_whatsapp_number ?? null,
     reminderHoursBefore: row.reminder_hours_before ?? 24,
     faqText: row.faq_text ?? null,
+    paymentsEnabled: row.payments_enabled ?? false,
+    collectPayments: row.collect_payments ?? false,
+    pricing: row.consultation_pricing ?? null,
   };
 }
 

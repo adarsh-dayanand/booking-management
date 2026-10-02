@@ -35,6 +35,11 @@ export const openApiSpec = {
     version: "0.2.0",
     description: `A Gemini-powered booking agent for clinics, on WhatsApp and an embeddable web chat, backed by Postgres and Google Calendar.
 
+## Who is who
+- **Admin** — the platform operator. Uses \`/v1/admin/*\` with the \`ADMIN_TOKEN\`. Onboards consultants and enables their Razorpay payments.
+- **Consultants** — clinics or any similar appointment-based place. Their team logs in at \`/v1/consultant/login\` and uses \`/v1/consultant/*\` (dashboard at \`/consultant/\`) for bookings, settings and fees.
+- **Users** — the end users who chat and book, over the web widget or WhatsApp (\`/v1/public/*\`). A user is identified by phone number; there is no registration.
+
 ## Try the agent here
 1. Open **POST /v1/public/{tenantSlug}/chat/messages**, click *Try it out*, keep \`tenantSlug = demo-clinic\`, and send a message. Reuse the same \`sessionId\` to continue a conversation; use **DELETE …/chat/sessions/{sessionId}** to start over.
 2. \`trace=true\` adds what the agent did: each **tool call** it made, the **result** it got back, and its text — so you can see it consult the calendar, ask you to confirm, then book.
@@ -45,20 +50,28 @@ export const openApiSpec = {
 - **WhatsApp:** the sender's number (signed by Meta) *is* the identity. The first message creates the patient automatically, with the WhatsApp profile name, and the agent saves further details (name, email, date of birth, language) as the patient mentions them.
 - **Web chat:** a visitor proves their number with a one-time code sent over WhatsApp — via the agent (it calls \`send_phone_otp\` / \`verify_phone_otp\`) or the **phone/otp** and **phone/verify** endpoints. Until then nothing stored about that number is revealed or changeable, and the agent can't book. You may pass \`phone\`/\`name\` in the chat request to capture a contact immediately (unverified).
 - With WhatsApp not configured (local dev), the code is returned as \`devCode\` so you can finish the flow here.
-- Staff can look patients up under **admin → patients**.
+- Consultants can look their users up under **consultant → users**.
 
 ## The two booking flows (per clinic, \`confirmationPolicy\`)
 - \`instant\` — direct booking: only times free on the doctor's Google Calendar are offered; booking confirms and blocks the calendar.
 - \`staff_approval\` — the booking is a request until the doctor explicitly accepts it (WhatsApp \`APPROVE <ref>\` or the *approve* endpoint below).
 
-Try it end to end: log in via **/v1/admin/login** (demo: \`owner@demo-clinic.test\` / \`password123\`), press **Authorize**, switch the flow with **PUT /v1/admin/settings**, book through the chat, then approve under **admin**.
+Try it end to end: log in via **/v1/consultant/login** (demo: \`owner@demo-clinic.test\` / \`password123\`), press **Authorize**, switch the flow with **PUT /v1/consultant/settings**, book through the chat, then approve under **consultant**.
+
+## Payments (Razorpay) — off unless the admin turns it on for a consultant
+1. **Admin** (\`ADMIN_TOKEN\`) calls **PUT /v1/admin/tenants/{slug}/payments** with the consultant's Razorpay key id/secret and webhook secret. Nothing below works until this is done, and consultants cannot do it.
+2. **Consultants** set their fees with **PUT /v1/consultant/payments**: \`flat\` (one hourly rate) or \`variable\` (weekday / weekend / night hourly rates). A service's fee is the hourly rate prorated by its duration. They also switch \`collectPayments\` on or off.
+3. With payments active, booking only **holds** the slot (\`AWAITING_PAYMENT\`) and the patient gets a Razorpay payment link — in the chat \`payment\` field on the web, as a link in the message on WhatsApp. Paying confirms the booking (or sends it to the doctor, per the clinic's flow). Unpaid holds are released after \`PAYMENT_HOLD_MINUTES\`.
+4. Register the \`webhookUrl\` from step 1 in Razorpay (event \`payment_link.paid\`). Without a webhook the chat still confirms payments by polling Razorpay.
 
 Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead of the agent (\`mode: "guided"\`).`,
   },
   servers: [{ url: "/" }],
   tags: [
-    { name: "agent", description: "Patient-facing chat (what the web widget calls)" },
-    { name: "admin", description: "Clinic staff API (bearer token)" },
+    { name: "agent", description: "User-facing chat (what the web widget calls)" },
+    { name: "consultant", description: "Consultant API: a clinic (or similar place) managing its own bookings, fees and settings (bearer token from /v1/consultant/login)" },
+    { name: "admin", description: "Admin API: the platform operator onboarding consultants and enabling their payments (ADMIN_TOKEN)" },
+    { name: "payments", description: "Razorpay webhook" },
     { name: "google", description: "Google Calendar connection" },
     { name: "whatsapp", description: "Meta WhatsApp Cloud API webhook" },
     { name: "system" },
@@ -156,19 +169,19 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
       },
     },
 
-    "/v1/admin/login": {
+    "/v1/consultant/login": {
       post: {
-        tags: ["admin"],
-        summary: "Staff login",
+        tags: ["consultant"],
+        summary: "Consultant login",
         description: "Returns a bearer token. Copy it into **Authorize**.",
         requestBody: { required: true, content: { "application/json": { schema: ref("LoginRequest"), example: { email: "owner@demo-clinic.test", password: "password123" } } } },
         responses: { 200: json({ type: "object", properties: { token: { type: "string" } } }), 401: errorResponse("Invalid credentials"), 429: errorResponse("Too many attempts") },
       },
     },
-    "/v1/admin/settings": {
-      get: { tags: ["admin"], summary: "Get clinic settings", security: bearer, responses: { 200: json({ type: "object", properties: { settings: ref("Settings") } }), 401: errorResponse("Unauthorized") } },
+    "/v1/consultant/settings": {
+      get: { tags: ["consultant"], summary: "Get clinic settings", security: bearer, responses: { 200: json({ type: "object", properties: { settings: ref("Settings") } }), 401: errorResponse("Unauthorized") } },
       put: {
-        tags: ["admin"],
+        tags: ["consultant"],
         summary: "Update clinic settings — choose the booking flow here",
         security: bearer,
         requestBody: {
@@ -190,34 +203,34 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
         },
       },
     },
-    "/v1/admin/appointments": {
+    "/v1/consultant/appointments": {
       get: {
-        tags: ["admin"],
+        tags: ["consultant"],
         summary: "List appointments",
         security: bearer,
-        parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["PENDING_CONFIRMATION", "CONFIRMED", "REJECTED", "CANCELLED", "COMPLETED"] } }],
+        parameters: [{ name: "status", in: "query", schema: { type: "string", enum: ["AWAITING_PAYMENT", "PENDING_CONFIRMATION", "CONFIRMED", "REJECTED", "CANCELLED", "COMPLETED"] } }],
         responses: { 200: json({ type: "object", properties: { appointments: { type: "array", items: ref("Appointment") } } }), 401: errorResponse("Unauthorized") },
       },
     },
-    "/v1/admin/appointments/{id}/approve": {
-      post: { tags: ["admin"], summary: "Doctor accepts a pending request", description: "Confirms it, turns the tentative calendar hold into a confirmed event and messages the patient.", security: bearer, parameters: [idParam()], responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 400: errorResponse("Not pending"), 404: errorResponse("Not found") } },
+    "/v1/consultant/appointments/{id}/approve": {
+      post: { tags: ["consultant"], summary: "Doctor accepts a pending request", description: "Confirms it, turns the tentative calendar hold into a confirmed event and messages the patient.", security: bearer, parameters: [idParam()], responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 400: errorResponse("Not pending"), 404: errorResponse("Not found") } },
     },
-    "/v1/admin/appointments/{id}/reject": {
-      post: { tags: ["admin"], summary: "Doctor declines a pending request", security: bearer, parameters: [idParam()], requestBody: { content: { "application/json": { schema: { type: "object", properties: { reason: { type: "string" } } }, example: { reason: "Doctor is on leave that day" } } } }, responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 400: errorResponse("Not pending") } },
+    "/v1/consultant/appointments/{id}/reject": {
+      post: { tags: ["consultant"], summary: "Doctor declines a pending request", security: bearer, parameters: [idParam()], requestBody: { content: { "application/json": { schema: { type: "object", properties: { reason: { type: "string" } } }, example: { reason: "Doctor is on leave that day" } } } }, responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 400: errorResponse("Not pending") } },
     },
-    "/v1/admin/appointments/{id}/cancel": {
-      post: { tags: ["admin"], summary: "Cancel an appointment", security: bearer, parameters: [idParam()], requestBody: { content: { "application/json": { schema: { type: "object", properties: { reason: { type: "string" } } } } } }, responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 400: errorResponse("Cannot cancel in this status") } },
+    "/v1/consultant/appointments/{id}/cancel": {
+      post: { tags: ["consultant"], summary: "Cancel an appointment", security: bearer, parameters: [idParam()], requestBody: { content: { "application/json": { schema: { type: "object", properties: { reason: { type: "string" } } } } } }, responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 400: errorResponse("Cannot cancel in this status") } },
     },
-    "/v1/admin/appointments/{id}/reschedule": {
-      post: { tags: ["admin"], summary: "Move an appointment", security: bearer, parameters: [idParam()], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["startAt"], properties: { startAt: { type: "string", format: "date-time" } } } } } }, responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 409: errorResponse("Slot taken") } },
+    "/v1/consultant/appointments/{id}/reschedule": {
+      post: { tags: ["consultant"], summary: "Move an appointment", security: bearer, parameters: [idParam()], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["startAt"], properties: { startAt: { type: "string", format: "date-time" } } } } } }, responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }), 409: errorResponse("Slot taken") } },
     },
-    "/v1/admin/appointments/{id}/retry-sync": {
-      post: { tags: ["admin"], summary: "Retry a failed Google Calendar sync", security: bearer, parameters: [idParam()], responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }) } },
+    "/v1/consultant/appointments/{id}/retry-sync": {
+      post: { tags: ["consultant"], summary: "Retry a failed Google Calendar sync", security: bearer, parameters: [idParam()], responses: { 200: json({ type: "object", properties: { appointment: ref("Appointment") } }) } },
     },
-    "/v1/admin/patients": {
+    "/v1/consultant/users": {
       get: {
-        tags: ["admin"],
-        summary: "Find patients",
+        tags: ["consultant"],
+        summary: "Find users",
         description: "Profiles are created automatically from the first message. Look one up by phone (any format; normalised) or search name/email/number.",
         security: bearer,
         parameters: [
@@ -225,21 +238,21 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           { name: "q", in: "query", description: "Substring of name, email or phone", schema: { type: "string" } },
           { name: "limit", in: "query", schema: { type: "integer", default: 25, maximum: 100 } },
         ],
-        responses: { 200: json({ type: "object", properties: { patients: { type: "array", items: ref("Patient") } } }), 401: errorResponse("Unauthorized") },
+        responses: { 200: json({ type: "object", properties: { users: { type: "array", items: ref("User") } } }), 401: errorResponse("Unauthorized") },
       },
     },
-    "/v1/admin/patients/{id}": {
-      get: { tags: ["admin"], summary: "A patient with their appointment history", security: bearer, parameters: [idParam("Patient id (uuid)")], responses: { 200: json({ type: "object", properties: { patient: ref("Patient"), appointments: { type: "array", items: { type: "object" } } } }), 404: errorResponse("Not found") } },
+    "/v1/consultant/users/{id}": {
+      get: { tags: ["consultant"], summary: "A user with their appointment history", security: bearer, parameters: [idParam("Patient id (uuid)")], responses: { 200: json({ type: "object", properties: { user: ref("User"), appointments: { type: "array", items: { type: "object" } } } }), 404: errorResponse("Not found") } },
     },
-    "/v1/admin/resources": {
-      get: { tags: ["admin"], summary: "List practitioners (and Google connection status)", security: bearer, responses: { 200: json({ type: "object", properties: { resources: { type: "array", items: { type: "object" } } } }) } },
+    "/v1/consultant/resources": {
+      get: { tags: ["consultant"], summary: "List practitioners (and Google connection status)", security: bearer, responses: { 200: json({ type: "object", properties: { resources: { type: "array", items: { type: "object" } } } }) } },
     },
-    "/v1/admin/resources/{id}/connect-link": {
-      get: { tags: ["admin", "google"], summary: "Get a 20-minute link for a doctor to connect Google Calendar", security: bearer, parameters: [idParam("Resource (practitioner) id")], responses: { 200: json({ type: "object", properties: { url: { type: "string" }, expiresInMinutes: { type: "integer" } } }), 400: errorResponse("Google not configured") } },
+    "/v1/consultant/resources/{id}/connect-link": {
+      get: { tags: ["consultant", "google"], summary: "Get a 20-minute link for a doctor to connect Google Calendar", security: bearer, parameters: [idParam("Resource (practitioner) id")], responses: { 200: json({ type: "object", properties: { url: { type: "string" }, expiresInMinutes: { type: "integer" } } }), 400: errorResponse("Google not configured") } },
     },
 
     "/auth/google/connect": {
-      get: { tags: ["google"], summary: "Start Google OAuth (logged-in staff)", description: "Browser redirect to Google's consent screen. Scopes: `calendar.events.owned` + `calendar.freebusy`.", security: bearer, parameters: [{ name: "resourceId", in: "query", required: true, schema: { type: "string", format: "uuid" } }], responses: { 302: { description: "Redirect to Google" } } },
+      get: { tags: ["google"], summary: "Start Google OAuth (logged-in consultant)", description: "Browser redirect to Google's consent screen. Scopes: `calendar.events.owned` + `calendar.freebusy`.", security: bearer, parameters: [{ name: "resourceId", in: "query", required: true, schema: { type: "string", format: "uuid" } }], responses: { 302: { description: "Redirect to Google" } } },
     },
     "/auth/google/start": {
       get: { tags: ["google"], summary: "Start Google OAuth from a signed link", parameters: [{ name: "token", in: "query", required: true, schema: { type: "string" } }], responses: { 302: { description: "Redirect to Google" }, 401: errorResponse("Link invalid or expired") } },
@@ -248,14 +261,90 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
       get: { tags: ["google"], summary: "Google OAuth redirect target", parameters: [{ name: "code", in: "query", schema: { type: "string" } }, { name: "state", in: "query", schema: { type: "string" } }], responses: { 200: { description: "Connected" } } },
     },
 
+    "/v1/consultant/payments": {
+      get: { tags: ["consultant"], summary: "Payment settings (fees)", security: bearer, responses: { 200: json({ type: "object", properties: { payments: ref("ClinicPayments") } }), 401: errorResponse("Unauthorized") } },
+      put: {
+        tags: ["consultant"],
+        summary: "Set consultation fees and switch payment collection on/off",
+        description: "Rates are rupees per hour, prorated by the service duration. `variable`: the start time picks the band — night (overrides) → weekend (Sat/Sun) → weekday, in the clinic's timezone. 403 until the admin has enabled payments for this clinic.",
+        security: bearer,
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { type: "object", properties: { collectPayments: { type: "boolean" }, pricing: ref("Pricing") } },
+              examples: {
+                flat: { summary: "Same hourly fee always", value: { collectPayments: true, pricing: { mode: "flat", hourlyRate: 1000 } } },
+                variable: { summary: "Weekday / weekend / night", value: { collectPayments: true, pricing: { mode: "variable", weekdayRate: 1000, weekendRate: 1500, nightRate: 2000, nightStart: "20:00", nightEnd: "06:00" } } },
+              },
+            },
+          },
+        },
+        responses: { 200: json({ type: "object", properties: { payments: ref("ClinicPayments") } }), 400: errorResponse("Validation error"), 401: errorResponse("Unauthorized"), 403: errorResponse("Payments not enabled by the admin") },
+      },
+    },
+    "/v1/consultant/payments/quote": {
+      get: {
+        tags: ["consultant"], summary: "What would a user pay for this service at this time?", security: bearer,
+        parameters: [
+          { name: "serviceId", in: "query", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "startAt", in: "query", required: true, schema: { type: "string", format: "date-time" }, example: "2026-10-10T12:00:00+05:30" },
+        ],
+        responses: { 200: json({ type: "object", properties: { amount: { type: "string", example: "₹750" }, amountPaise: { type: "integer" }, band: { type: "string", enum: ["flat", "weekday", "weekend", "night"] }, hourlyRate: { type: "number" } } }), 400: errorResponse("No fees set / bad input") },
+      },
+    },
+    "/v1/public/{tenantSlug}/chat/payments/{appointmentId}": {
+      get: {
+        tags: ["agent"], summary: "Payment outcome for a held booking (the widget polls this)",
+        description: "Asks Razorpay directly, so it confirms a paid booking even if the webhook never arrived. `message` is null while payment is still pending.",
+        parameters: [tenantParam, idParam("Appointment id (uuid)")].map((p: any, i) => (i === 1 ? { ...p, name: "appointmentId" } : p)),
+        responses: { 200: json({ type: "object", properties: { paymentStatus: { type: "string", enum: ["created", "paid", "expired", "failed", "cancelled"] }, appointmentStatus: { type: "string" }, message: { type: "string", nullable: true } } }), 404: errorResponse("No payment for that appointment") },
+      },
+    },
+    "/v1/admin/tenants": {
+      get: { tags: ["admin"], summary: "Admin: list consultants and their payment status", security: [{ adminAuth: [] }], responses: { 200: json({ type: "object", properties: { tenants: { type: "array", items: ref("AdminPayments") } } }), 401: errorResponse("Bad platform token") } },
+    },
+    "/v1/admin/tenants/{slug}/payments": {
+      get: { tags: ["admin"], summary: "Admin: a consultant's Razorpay setup", security: [{ adminAuth: [] }], parameters: [{ name: "slug", in: "path", required: true, schema: { type: "string" } }], responses: { 200: json({ type: "object", properties: { payments: ref("AdminPayments") } }), 404: errorResponse("Unknown clinic") } },
+      put: {
+        tags: ["admin"],
+        summary: "Admin: store a consultant's Razorpay credentials and enable/disable payments",
+        description: "Credentials are checked against Razorpay before being stored, and encrypted at rest. Omitted fields keep their stored value. The response's `webhookUrl` is what to register in the consultant's Razorpay dashboard (event `payment_link.paid`).",
+        security: [{ adminAuth: [] }],
+        parameters: [{ name: "slug", in: "path", required: true, schema: { type: "string", example: "demo-clinic" } }],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { enabled: { type: "boolean" }, razorpayKeyId: { type: "string", example: "rzp_test_xxxxxxxx" }, razorpayKeySecret: { type: "string" }, razorpayWebhookSecret: { type: "string" } } } } } },
+        responses: { 200: json({ type: "object", properties: { payments: ref("AdminPayments") } }), 400: errorResponse("Missing or rejected credentials"), 401: errorResponse("Bad platform token"), 403: errorResponse("Admin API disabled") },
+      },
+    },
+    "/v1/webhooks/razorpay/{tenantSlug}": {
+      post: { tags: ["payments"], summary: "Razorpay webhook (called by Razorpay)", description: "Signed with `X-Razorpay-Signature` using the clinic's webhook secret. `payment_link.paid` confirms the held booking. Idempotent.", parameters: [tenantParam], requestBody: { content: { "application/json": { schema: { type: "object" } } } }, responses: { 200: { description: "Processed or ignored" }, 401: { description: "Bad signature" } } },
+    },
+
     "/v1/webhooks/whatsapp": {
       get: { tags: ["whatsapp"], summary: "Meta webhook verification handshake", parameters: [{ name: "hub.mode", in: "query", schema: { type: "string" } }, { name: "hub.verify_token", in: "query", schema: { type: "string" } }, { name: "hub.challenge", in: "query", schema: { type: "string" } }], responses: { 200: { description: "Echoes hub.challenge" }, 403: { description: "Bad verify token" } } },
       post: { tags: ["whatsapp"], summary: "Inbound WhatsApp messages (called by Meta)", description: "Signed with `X-Hub-Signature-256`. Messages from the clinic's staff number are treated as doctor commands (APPROVE / REJECT / CANCEL / PENDING / CONNECT); everyone else talks to the agent.", requestBody: { content: { "application/json": { schema: { type: "object" } } } }, responses: { 200: { description: "Acknowledged" }, 401: { description: "Bad signature" } } },
     },
   },
   components: {
-    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } },
+    securitySchemes: {
+      bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      adminAuth: { type: "http", scheme: "bearer", description: "The ADMIN_TOKEN env value (not a consultant token)" },
+    },
     schemas: {
+      Pricing: {
+        oneOf: [
+          { type: "object", required: ["mode", "hourlyRate"], properties: { mode: { type: "string", enum: ["flat"] }, hourlyRate: { type: "number", example: 1000 } } },
+          { type: "object", required: ["mode", "weekdayRate", "weekendRate", "nightRate"], properties: { mode: { type: "string", enum: ["variable"] }, weekdayRate: { type: "number" }, weekendRate: { type: "number" }, nightRate: { type: "number" }, nightStart: { type: "string", example: "20:00", default: "20:00" }, nightEnd: { type: "string", example: "06:00", default: "06:00" } } },
+        ],
+      },
+      ClinicPayments: {
+        type: "object",
+        properties: { available: { type: "boolean", description: "The admin has enabled payments for this consultant" }, collectPayments: { type: "boolean" }, currency: { type: "string", example: "INR" }, pricing: ref("Pricing"), note: { type: "string" } },
+      },
+      AdminPayments: {
+        type: "object",
+        properties: { slug: { type: "string" }, name: { type: "string" }, paymentsEnabled: { type: "boolean" }, razorpayKeyId: { type: "string", nullable: true }, razorpayMode: { type: "string", enum: ["test", "live"], nullable: true }, keySecretConfigured: { type: "boolean" }, webhookSecretConfigured: { type: "boolean" }, consultantCollectsPayments: { type: "boolean" }, consultationPricing: ref("Pricing"), webhookUrl: { type: "string" } },
+      },
       Error: { type: "object", properties: { error: { type: "string" }, correlationId: { type: "string" } } },
       ChatRequest: {
         type: "object", required: ["sessionId", "message"],
@@ -272,6 +361,11 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           replyText: { type: "string" },
           mode: { type: "string", enum: ["agent", "guided"], description: "`guided` = no GEMINI_API_KEY, numbered-menu fallback." },
           options: { type: "array", items: { type: "object", properties: { id: { type: "string" }, label: { type: "string" } } }, description: "Menu buttons (guided mode only)." },
+          payment: {
+            type: "object",
+            description: "Present when the patient still has to pay to confirm a held booking. The web widget renders it as a Pay button; on WhatsApp the same link is already in replyText.",
+            properties: { appointmentId: { type: "string", format: "uuid" }, url: { type: "string" }, amount: { type: "string", example: "₹500" }, amountPaise: { type: "integer" }, expiresAt: { type: "string", format: "date-time" } },
+          },
           trace: { type: "array", items: ref("AgentEvent"), description: "Present with trace=true." },
         },
       },
@@ -319,7 +413,7 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           whatsappPhoneNumberId: { type: "string", nullable: true },
         },
       },
-      Patient: {
+      User: {
         type: "object",
         description: "Created automatically from the first message; identity is the phone number (unique per clinic).",
         properties: {
@@ -335,9 +429,10 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
       Appointment: {
         type: "object",
         properties: {
-          id: { type: "string", format: "uuid" }, status: { type: "string", enum: ["PENDING_CONFIRMATION", "CONFIRMED", "REJECTED", "CANCELLED", "COMPLETED"] },
+          id: { type: "string", format: "uuid" }, status: { type: "string", enum: ["AWAITING_PAYMENT", "PENDING_CONFIRMATION", "CONFIRMED", "REJECTED", "CANCELLED", "COMPLETED"] },
           start_at: { type: "string", format: "date-time" }, end_at: { type: "string", format: "date-time" }, channel: { type: "string", enum: ["web", "whatsapp"] },
           patient_name: { type: "string" }, patient_phone: { type: "string" }, service_name: { type: "string" }, resource_name: { type: "string" },
+          payment_status: { type: "string", enum: ["created", "paid", "expired", "failed", "cancelled"], nullable: true }, amount_paise: { type: "integer", nullable: true },
           calendar_sync_status: { type: "string", enum: ["pending", "synced", "failed", "skipped"] }, google_event_id: { type: "string", nullable: true },
         },
       },

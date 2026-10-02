@@ -13,7 +13,7 @@ function buildConfig(timezone: string, rules: AvailabilityRule[]): TenantConfig 
       whatsappPhoneNumberId: null,
       staffWhatsappNumber: null,
       reminderHoursBefore: 24,
-      faqText: null,
+      faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null,
     },
     services: [],
     resources: [],

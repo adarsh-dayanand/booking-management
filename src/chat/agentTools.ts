@@ -1,76 +1,16 @@
 import { DateTime } from "luxon";
 import { z } from "zod";
 import * as booking from "../booking/booking";
+import { identityPatient, identityPhone, isoDate, isoDateTime, label, NOT_VERIFIED, ownsAppointment, uuid, type AgentSession, type Tool, type ToolContext, type ToolResult } from "./toolKit";
+import { paymentTools } from "./paymentTools";
+import { paymentActive, quoteFee, formatRupees } from "../payments/pricing";
 import { pool } from "../lib/db";
 import { AppError, SlotConflictError } from "../errors";
 import { notifyStaff } from "../channels/notify";
 import { sendPhoneOtp, verifyPhoneOtp } from "../channels/phoneOtp";
-import { getPatientByPhone, touchPatient, updatePatientDetails, type Patient } from "../booking/patients";
+import { getPatientByPhone, touchPatient, updatePatientDetails } from "../booking/patients";
 import { digitsOnly, isPlausiblePhone, normalizePhone } from "../lib/phone";
-import type { Channel, TenantConfig } from "../types";
-
-/** Per-conversation facts the agent can't be talked out of; persisted with the conversation. */
-export interface AgentSession {
-  /**
-   * Phone (normalised digits) proven to belong to this chat. On WhatsApp the signed sender number is the proof
-   * and this is never needed; on web it is set only by a successful verify_phone_otp.
-   */
-  verifiedPhone?: string;
-  /** Web only: a number the visitor typed or the host page supplied. Unproven — it never grants access to anything. */
-  claimedPhone?: string;
-}
-
-export interface ToolContext {
-  config: TenantConfig;
-  channel: Channel;
-  externalId: string;
-  session: AgentSession;
-}
-
-type ToolResult = Record<string, unknown>;
-interface Tool {
-  declaration: { name: string; description: string; parameters: object };
-  /** Writes change appointments; the agent loop uses this to avoid losing track of completed actions. */
-  write: boolean;
-  run: (args: any, ctx: ToolContext) => Promise<ToolResult>;
-}
-
-const uuid = z.string().uuid();
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use YYYY-MM-DD");
-const isoDateTime = z.string().datetime({ offset: true });
-
-/** The phone whose records this chat may read and change, or undefined if the visitor hasn't proven one. */
-function identityPhone(ctx: ToolContext): string | undefined {
-  return ctx.channel === "whatsapp" ? normalizePhone(ctx.externalId) : ctx.session.verifiedPhone;
-}
-
-const NOT_VERIFIED = {
-  error:
-    "The patient's phone number isn't verified yet. Ask for their phone number, call send_phone_otp, then verify_phone_otp with the code they receive on WhatsApp.",
-};
-
-/** The patient profile for the proven identity, created on the spot if this is the first time we see the number. */
-async function identityPatient(ctx: ToolContext): Promise<Patient | null> {
-  const phone = identityPhone(ctx);
-  if (!phone) return null;
-  return touchPatient(ctx.config.tenant.id, phone, { channel: ctx.channel, verified: true });
-}
-
-async function ownsAppointment(ctx: ToolContext, appointmentId: string): Promise<boolean> {
-  const phone = identityPhone(ctx);
-  if (!phone) return false;
-  const result = await pool.query(
-    `SELECT 1 FROM appointments a JOIN patients p ON p.id = a.patient_id
-     WHERE a.id = $1 AND a.tenant_id = $2 AND p.phone_normalized = $3`,
-    [appointmentId, ctx.config.tenant.id, phone]
-  );
-  return result.rows.length > 0;
-}
-
-function label(iso: string | Date, tz: string): string {
-  const dt = iso instanceof Date ? DateTime.fromJSDate(iso, { zone: tz }) : DateTime.fromISO(iso, { zone: "utc" }).setZone(tz);
-  return dt.toFormat("ccc dd LLL yyyy, HH:mm");
-}
+export type { AgentSession, ToolContext } from "./toolKit";
 
 async function slotIsFree(ctx: ToolContext, resourceId: string, serviceId: string, start: Date): Promise<boolean> {
   // Re-derive availability (clinic hours + existing bookings + the doctor's live Google free/busy) rather than trusting the model's time.
@@ -149,7 +89,9 @@ const tools: Tool[] = [
       if (practitioners.length === 0) return { error: "Unknown practitioner" };
 
       const rangeStart = new Date(Math.max(from.toMillis(), Date.now()));
-      const found: { practitionerId: string; practitionerName: string; startAt: string; local: string; day: string }[] = [];
+      const pricing = paymentActive(ctx.config.tenant) ? ctx.config.tenant.pricing : null;
+      const service = ctx.config.services.find((sv) => sv.id === args.serviceId);
+      const found: { practitionerId: string; practitionerName: string; startAt: string; local: string; day: string; fee?: string }[] = [];
       for (const r of practitioners) {
         const slots = await booking.generateAvailableSlots(ctx.config, r.id, args.serviceId, rangeStart, to.toJSDate());
         for (const s of slots) {
@@ -161,6 +103,7 @@ const tools: Tool[] = [
             startAt: s.startAt,
             local: local.toFormat("ccc dd LLL yyyy, HH:mm"),
             day: local.toISODate()!,
+            ...(pricing && service ? { fee: formatRupees(quoteFee(pricing, tz, new Date(s.startAt), service).amountPaise) } : {}),
           });
         }
       }
@@ -223,6 +166,20 @@ const tools: Tool[] = [
           phoneVerified: true,
           channel: ctx.channel,
         });
+        if (result.payment) {
+          if (ctx.outbox) ctx.outbox.payment = result.payment;
+          return {
+            appointmentId: result.appointmentId,
+            reference: result.appointmentId.slice(0, 6),
+            status: result.status,
+            when: label(start, ctx.config.tenant.timezone),
+            amount: result.payment.amount,
+            paymentUrl: result.payment.url,
+            payBefore: label(result.payment.expiresAt, ctx.config.tenant.timezone),
+            meaning:
+              "NOT CONFIRMED YET. The time is held for the patient until payBefore. Tell them the amount, give them the paymentUrl, and say the booking is confirmed only after they pay. Do not call it booked or requested.",
+          };
+        }
         const pending = result.status === "PENDING_CONFIRMATION";
         return {
           appointmentId: result.appointmentId,
@@ -334,20 +291,21 @@ const tools: Tool[] = [
     write: false,
     declaration: {
       name: "find_my_appointments",
-      description: "List the patient's upcoming appointments (pending or confirmed).",
+      description: "List the patient's upcoming appointments (awaiting payment, pending or confirmed).",
       parameters: { type: "object", properties: {} },
     },
     run: async (_args, ctx) => {
       const phone = identityPhone(ctx);
       if (!phone) return NOT_VERIFIED;
       const result = await pool.query(
-        `SELECT a.id, a.status, a.start_at, s.name AS service_name, r.name AS resource_name
+        `SELECT a.id, a.status, a.start_at, s.name AS service_name, r.name AS resource_name, pay.razorpay_payment_link_url AS payment_url
          FROM appointments a
          JOIN patients p ON p.id = a.patient_id
          JOIN services s ON s.id = a.service_id
          JOIN resources r ON r.id = a.resource_id
+         LEFT JOIN payments pay ON pay.appointment_id = a.id AND pay.status = 'created'
          WHERE a.tenant_id = $1 AND p.phone_normalized = $2
-           AND a.status IN ('PENDING_CONFIRMATION', 'CONFIRMED') AND a.end_at > now()
+           AND a.status IN ('AWAITING_PAYMENT', 'PENDING_CONFIRMATION', 'CONFIRMED') AND a.end_at > now()
          ORDER BY a.start_at ASC LIMIT 10`,
         [ctx.config.tenant.id, phone]
       );
@@ -359,6 +317,7 @@ const tools: Tool[] = [
           service: r.service_name,
           practitioner: r.resource_name,
           when: label(r.start_at, ctx.config.tenant.timezone),
+          ...(r.status === "AWAITING_PAYMENT" ? { paymentUrl: r.payment_url, note: "Unpaid: held until paid, not confirmed." } : {}),
         })),
       };
     },
@@ -427,7 +386,7 @@ const tools: Tool[] = [
     declaration: {
       name: "request_human_handoff",
       description:
-        "Alert clinic staff that a human should follow up (patient asks for a person, complaint, anything you can't resolve, possible emergency).",
+        "Alert the clinic's team that a human should follow up (patient asks for a person, complaint, anything you can't resolve, possible emergency).",
       parameters: {
         type: "object",
         properties: { reason: { type: "string" }, patientName: { type: "string" }, patientPhone: { type: "string" } },
@@ -449,6 +408,8 @@ const tools: Tool[] = [
     },
   },
 ];
+
+tools.push(...paymentTools);
 
 export const toolDeclarations = tools.map((t) => t.declaration);
 const byName = new Map(tools.map((t) => [t.declaration.name, t]));

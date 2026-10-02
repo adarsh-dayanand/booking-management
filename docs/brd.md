@@ -57,7 +57,7 @@ Set final thresholds with the clinic after measuring its current workflow. These
 |---|---|---|
 | Capture enquiries | Eligible connected-channel enquiries recorded / eligible enquiries observed | At least 95% |
 | Respond promptly | Median time to first useful automated response | Under 2 minutes |
-| Prevent double-booking | Confirmed conflicts caused by the platform | Zero |
+| Prevent double-booking | Confirmed conflicts caused by the admin | Zero |
 | Reduce staff effort | Staff minutes per booking before and during pilot | Agreed measurable reduction |
 | Keep calendar synchronized | Confirmed bookings with linked calendar events | At least 99%, with all exceptions visible |
 | Surface delivery outcomes | Confirmations delivered or flagged for staff | At least 99% accounted for |
@@ -74,7 +74,7 @@ Set final thresholds with the clinic after measuring its current workflow. These
 - Official WhatsApp inbound booking chatbot after business onboarding.
 - Shared availability, booking, rescheduling, cancellation, and approval workflows.
 - Google Calendar OAuth connection, busy-time checks, event creation/update/deletion, token refresh, reconnect, and reconciliation.
-- Staff dashboard for requests, appointments, actions, and integration exceptions.
+- Consultant dashboard for requests, appointments, actions, and integration exceptions.
 - Booking confirmations and optional reminders subject to patient choices, platform policies, and costs.
 - Basic analytics by channel, booking status, response time, cancellations, and operational failures.
 
@@ -215,7 +215,7 @@ The chatbot may interpret administrative intent and answer from clinic-approved 
 Website form ───────┐
 Website chatbot ────┼──> TypeScript Booking API ──> PostgreSQL
 WhatsApp webhook ───┘          │                     │
-Staff dashboard ───────────────┤                     └──> Retryable jobs
+Consultant dashboard ───────────────┤                     └──> Retryable jobs
                                ├──> Google Calendar adapter
                                ├──> WhatsApp adapter
                                └──> Optional AI adapter
@@ -226,7 +226,7 @@ flowchart LR
   Form[Website form] --> API[Booking API]
   Chat[Website chatbot] --> API
   WA[WhatsApp webhook] --> API
-  Admin[Staff dashboard] --> API
+  Admin[Consultant dashboard] --> API
   API --> Rules[Booking rules]
   Rules --> DB[(PostgreSQL)]
   API --> Jobs[Durable jobs]
@@ -304,11 +304,11 @@ Database and Google Calendar cannot form one atomic transaction. The design uses
 | `POST /v1/public/:tenantSlug/appointments` | Create a booking request using an idempotency key |
 | `POST /v1/public/:tenantSlug/chat/messages` | Website chatbot turn |
 | `POST /v1/webhooks/whatsapp` | Verified inbound provider events |
-| `GET /v1/admin/appointments` | Tenant-scoped staff view |
-| `POST /v1/admin/appointments/:id/approve` | Approve a pending request |
-| `POST /v1/admin/appointments/:id/reschedule` | Recheck and change slot |
-| `POST /v1/admin/appointments/:id/cancel` | Cancel and queue integrations |
-| `GET /v1/admin/calendar/connect` | Begin owner OAuth flow |
+| `GET /v1/consultant/appointments` | Tenant-scoped staff view |
+| `POST /v1/consultant/appointments/:id/approve` | Approve a pending request |
+| `POST /v1/consultant/appointments/:id/reschedule` | Recheck and change slot |
+| `POST /v1/consultant/appointments/:id/cancel` | Cancel and queue integrations |
+| `GET /v1/consultant/calendar/connect` | Begin owner OAuth flow |
 | `GET /v1/auth/google/callback` | Complete OAuth flow |
 | `GET /health` | Health and dependency status |
 
@@ -335,7 +335,7 @@ Response fields include `appointmentId`, `status`, `calendarSyncStatus`, and wor
 ```text
 apps/
   web/                   # Patient pages, form, embedded chatbot
-  admin/                 # Staff dashboard
+  admin/                 # Consultant dashboard
   api/                   # API and background worker
 packages/
   booking/               # Availability, rules, state machine

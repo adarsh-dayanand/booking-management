@@ -26,6 +26,10 @@ vi.mock("../channels/phoneOtp", () => ({
   verifyPhoneOtp: (...a: unknown[]) => verifyPhoneOtp(...a),
 }));
 vi.mock("../channels/notify", () => ({ notifyStaff: vi.fn() }));
+const reconcileAppointment = vi.fn();
+vi.mock("../payments/settlement", () => ({ reconcileAppointment: (...a: unknown[]) => reconcileAppointment(...a) }));
+const getByAppointment = vi.fn();
+vi.mock("../payments/store", () => ({ getByAppointment: (...a: unknown[]) => getByAppointment(...a) }));
 
 import { executeTool, type AgentSession, type ToolContext } from "../chat/agentTools";
 
@@ -35,7 +39,7 @@ const RESOURCE = "33333333-3333-4333-8333-333333333333";
 
 const ctx = (channel: "web" | "whatsapp", externalId: string, session: AgentSession = {}): ToolContext => ({
   config: {
-    tenant: { id: "t1", name: "C", slug: "c", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null },
+    tenant: { id: "t1", name: "C", slug: "c", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null },
     services: [], resources: [], availabilityRules: [],
   },
   channel,
@@ -46,7 +50,7 @@ const ctx = (channel: "web" | "whatsapp", externalId: string, session: AgentSess
 const patient = (over: object = {}) => ({ id: "p1", name: "Asha Rao", phone: "+919876543210", phoneNormalized: "919876543210", phoneVerified: true, email: null, ...over });
 
 beforeEach(() => {
-  for (const m of [query, cancelAppointment, generateAvailableSlots, createAppointment, touchPatient, getPatientByPhone, updatePatientDetails, sendPhoneOtp, verifyPhoneOtp]) m.mockReset();
+  for (const m of [query, cancelAppointment, generateAvailableSlots, createAppointment, touchPatient, getPatientByPhone, updatePatientDetails, sendPhoneOtp, verifyPhoneOtp, reconcileAppointment, getByAppointment]) m.mockReset();
   touchPatient.mockResolvedValue(patient());
 });
 
@@ -178,5 +182,63 @@ describe("booking guards", () => {
 
   it("returns validation problems to the model instead of throwing", async () => {
     expect(await executeTool("book_appointment", { serviceId: "nope" }, ctx("whatsapp", "919876543210"))).toMatchObject({ error: expect.stringContaining("Invalid arguments") });
+  });
+});
+
+describe("payments in the chat", () => {
+  const args = { serviceId: SERVICE, practitionerId: RESOURCE, startAt: "2030-01-07T10:00:00.000Z" };
+  const offer = { appointmentId: APPT, url: "https://rzp.io/i/abc", amountPaise: 50_000, amount: "₹500", expiresAt: "2030-01-07T08:00:00.000Z" };
+
+  it("a booking that needs payment is reported as NOT confirmed, with the link, and the link is queued for the patient", async () => {
+    generateAvailableSlots.mockResolvedValue([{ startAt: args.startAt, endAt: "2030-01-07T10:30:00.000Z" }]);
+    createAppointment.mockResolvedValue({ appointmentId: APPT, status: "AWAITING_PAYMENT", payment: offer });
+    const c = { ...ctx("whatsapp", "919876543210"), outbox: {} as { payment?: typeof offer } };
+    const r = await executeTool("book_appointment", args, c);
+    expect(r).toMatchObject({ status: "AWAITING_PAYMENT", amount: "₹500", paymentUrl: offer.url, meaning: expect.stringContaining("NOT CONFIRMED") });
+    expect(c.outbox.payment).toEqual(offer);
+  });
+
+  it("slots carry the fee only when payments are active for the clinic", async () => {
+    const base = ctx("whatsapp", "919876543210");
+    const withServices = (over: object) => ({
+      ...base,
+      config: {
+        ...base.config,
+        tenant: { ...base.config.tenant, ...over },
+        services: [{ id: SERVICE, tenantId: "t1", name: "Consult", durationMinutes: 30, bufferMinutes: 0, active: true }],
+        resources: [{ id: RESOURCE, tenantId: "t1", name: "Doc", googleCalendarId: null, googleRefreshTokenEncrypted: null, googleConnectionStatus: "disconnected" as const, active: true }],
+      },
+    });
+    generateAvailableSlots.mockResolvedValue([{ startAt: "2099-01-07T10:00:00.000Z", endAt: "2099-01-07T10:30:00.000Z" }]);
+    const slotArgs = { serviceId: SERVICE, fromDate: "2099-01-07", toDate: "2099-01-07" };
+
+    const active = await executeTool("get_available_slots", slotArgs, withServices({ paymentsEnabled: true, collectPayments: true, pricing: { mode: "flat", hourlyRate: 1000 } }));
+    expect((active as any).slots[0].fee).toBe("₹500");
+    const inactive = await executeTool("get_available_slots", slotArgs, withServices({ paymentsEnabled: false, collectPayments: true, pricing: { mode: "flat", hourlyRate: 1000 } }));
+    expect((inactive as any).slots[0]).not.toHaveProperty("fee");
+  });
+
+  it("check_payment_status only works on the patient's own appointment", async () => {
+    query.mockResolvedValue({ rows: [] });
+    const r = await executeTool("check_payment_status", { appointmentId: APPT }, ctx("whatsapp", "919876543210"));
+    expect(r).toHaveProperty("error");
+    expect(reconcileAppointment).not.toHaveBeenCalled();
+  });
+
+  it("check_payment_status reports a completed payment", async () => {
+    query.mockResolvedValue({ rows: [{}] });
+    reconcileAppointment.mockResolvedValue({ paymentStatus: "paid", appointmentStatus: "CONFIRMED" });
+    const r = await executeTool("check_payment_status", { appointmentId: APPT }, ctx("whatsapp", "919876543210"));
+    expect(r).toMatchObject({ paymentStatus: "paid", meaning: expect.stringContaining("confirmed") });
+  });
+
+  it("check_payment_status hands back the link while still unpaid", async () => {
+    query.mockResolvedValue({ rows: [{}] });
+    reconcileAppointment.mockResolvedValue({ paymentStatus: "created", appointmentStatus: "AWAITING_PAYMENT" });
+    getByAppointment.mockResolvedValue({ appointmentId: APPT, linkUrl: offer.url, amountPaise: 50_000, expiresAt: new Date("2030-01-07T08:00:00.000Z") });
+    const c = { ...ctx("whatsapp", "919876543210"), outbox: {} as { payment?: typeof offer } };
+    const r = await executeTool("check_payment_status", { appointmentId: APPT }, c);
+    expect(r).toMatchObject({ paymentStatus: "unpaid", paymentUrl: offer.url });
+    expect(c.outbox.payment?.url).toBe(offer.url);
   });
 });
