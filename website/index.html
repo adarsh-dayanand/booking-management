@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neem | Appointment booking on WhatsApp for clinics</title>
+<meta name="description" content="Neem answers your patients on WhatsApp, books them into Google Calendar and takes payment in the chat, so no booking is lost to a busy phone.">
+<meta name="theme-color" content="#fcfdfc">
+<link rel="preload" href="assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="styles.css">
+<script>document.documentElement.classList.add("js");</script>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="Neem home"><span class="brand-mark"><i class="ph-fill ph-leaf"></i></span>Neem</a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#why">Why Neem</a>
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#channels">Channels</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-primary btn-sm" href="#demo">Book a demo</a>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <h1 class="rise" style="--d:.05s">Never miss a patient who wants to book.</h1>
+        <p class="lead rise" style="--d:.15s">Neem answers patients on WhatsApp, books them into your Google Calendar, and takes payment in the chat.</p>
+        <div class="cta-row rise" style="--d:.25s">
+          <a class="btn btn-primary" href="#demo">Book a demo <i class="ph ph-arrow-right"></i></a>
+          <a class="btn btn-ghost" href="#how">See how it works</a>
+        </div>
+      </div>
+
+      <div class="hero-visual rise" style="--d:.2s">
+        <div class="phone" role="img" aria-label="A patient books a consultation with Dr. Rao and pays the fee inside WhatsApp">
+          <div class="phone-screen">
+            <div class="chat-head">
+              <span class="avatar"><i class="ph-fill ph-stethoscope"></i></span>
+              <div><b>Rao Family Clinic</b><small>Replies instantly</small></div>
+            </div>
+            <div class="chat-body" id="chat" aria-hidden="true">
+              <div class="msg out">Hi, I need to see Dr. Rao this week</div>
+              <div class="msg in">Hello Meera! Dr. Rao is free on Thursday at 10:30 AM, 11:15 AM or 4:45 PM.</div>
+              <div class="msg out">11:15 works</div>
+              <div class="msg in">The consultation fee is &#8377;600. Pay here to confirm your slot.<span class="paybtn"><i class="ph-fill ph-credit-card"></i>Pay &#8377;600</span></div>
+              <div class="msg ok"><i class="ph-fill ph-check-circle"></i><span>Payment received. You are booked for Thursday, 11:15 AM.</span></div>
+            </div>
+            <div class="chat-foot"><div><span>Message</span><i class="ph-fill ph-paper-plane-tilt"></i></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="works" aria-label="Works with">
+    <div class="wrap works-in">
+      <p class="reveal">Built on the tools your clinic already uses</p>
+      <div class="logos reveal" style="--d:.1s">
+        <picture><img src="https://cdn.simpleicons.org/whatsapp/0d1512" alt="WhatsApp" width="28" height="28" loading="lazy"></picture>
+        <picture><img src="https://cdn.simpleicons.org/googlecalendar/0d1512" alt="Google Calendar" width="28" height="28" loading="lazy"></picture>
+        <picture><img src="https://cdn.simpleicons.org/googlegemini/0d1512" alt="Google Gemini" width="28" height="28" loading="lazy"></picture>
+        <picture><img src="https://cdn.simpleicons.org/postgresql/0d1512" alt="PostgreSQL" width="28" height="28" loading="lazy"></picture>
+        <picture><img src="https://cdn.simpleicons.org/razorpay/0d1512" alt="Razorpay" width="28" height="28" loading="lazy"></picture>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="why">
+    <div class="wrap">
+      <h2 class="why-head reveal">Never lose a patient to a busy phone.</h2>
+      <p class="why-sub reveal">Small clinics lose bookings when nobody is free to answer. Neem replies to every patient right away, at any hour, and keeps the doctor in control.</p>
+      <div class="versus">
+        <div class="vs-col vs-old reveal">
+          <h3>Without Neem</h3>
+          <ul>
+            <li><i class="ph ph-phone-slash"></i>The phone rings during consultations and enquiries go unanswered.</li>
+            <li><i class="ph ph-moon"></i>Messages sent after closing wait until morning, and some patients book elsewhere.</li>
+            <li><i class="ph ph-hourglass-medium"></i>The front desk spends hours going back and forth to find a free slot.</li>
+            <li><i class="ph ph-calendar-x"></i>Patients forget or cancel late, and the slot sits empty.</li>
+            <li><i class="ph ph-warning"></i>The diary and the calendar drift apart, and slots get double-booked.</li>
+          </ul>
+        </div>
+        <div class="vs-col vs-new reveal" style="--d:.1s">
+          <h3>With Neem</h3>
+          <ul>
+            <li><i class="ph-fill ph-check-circle"></i>Every patient gets an answer on WhatsApp straight away.</li>
+            <li><i class="ph-fill ph-check-circle"></i>Bookings happen at any hour, including evenings and weekends.</li>
+            <li><i class="ph-fill ph-check-circle"></i>Front desk time goes to the patients in the room, not the phone.</li>
+            <li><i class="ph-fill ph-check-circle"></i>Patients can pay in the chat to confirm, and a reminder goes out before each visit.</li>
+            <li><i class="ph-fill ph-check-circle"></i>A slot can be booked only once, and it appears on your Google Calendar.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="how" style="padding-top:0">
+    <div class="wrap how-grid">
+      <div class="how-sticky reveal">
+        <h2>From first message to confirmed slot.</h2>
+        <p class="lead">No forms, no app to install, no account to create.</p>
+      </div>
+      <div class="steps">
+        <article class="step reveal" data-step>
+          <i class="ph ph-chat-circle-text"></i>
+          <div><h3>Ask</h3><p>The patient writes to your WhatsApp number or website chat, in their own words. The agent understands what they need.</p></div>
+        </article>
+        <article class="step reveal" data-step>
+          <i class="ph ph-calendar-check"></i>
+          <div><h3>Choose</h3><p>The agent checks your Google Calendar and offers only the times that are really free, for the right doctor and service.</p></div>
+        </article>
+        <article class="step reveal" data-step>
+          <i class="ph ph-seal-check"></i>
+          <div><h3>Confirm</h3><p>Patients pay in the chat if you ask for it. The booking then confirms instantly or waits for the doctor's approval, and the calendar event follows.</p></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features" style="padding-top:0">
+    <div class="wrap">
+      <h2 class="bento-head reveal">Everything the front desk does, minus the phone.</h2>
+      <div class="bento">
+        <article class="tile t-modes reveal">
+          <i class="ph ph-toggle-right"></i>
+          <div class="modes">
+            <div><b>Instant</b><span>Patient picks a slot and it is booked. The doctor gets a heads-up.</span></div>
+            <div><b>Doctor approves</b><span>The doctor gets a request and replies APPROVE or REJECT.</span></div>
+          </div>
+          <h3>Instant or doctor-approved</h3>
+          <p>Pick the policy that fits each clinic and change it any time from settings.</p>
+        </article>
+        <article class="tile t-cal reveal" style="--d:.08s">
+          <i class="ph ph-calendar-dots"></i>
+          <h3>Google Calendar, connected</h3>
+          <p>Confirmed visits become calendar events. Only free and busy time is read, never your event titles.</p>
+        </article>
+        <article class="tile t-pay reveal" style="--d:.1s">
+          <i class="ph ph-credit-card"></i>
+          <h3>Razorpay payments in WhatsApp</h3>
+          <p>Your admin connects Razorpay, chooses which services need payment and sets the amount. Patients pay in the chat and the slot is confirmed.</p>
+        </article>
+        <article class="tile t-id reveal" style="--d:.12s">
+          <i class="ph ph-phone-call"></i>
+          <h3>No sign-up for patients</h3>
+          <p>A phone number is the identity. Details are saved as they chat. Web visitors verify with a code on WhatsApp.</p>
+        </article>
+        <article class="tile t-rem reveal" style="--d:.08s">
+          <i class="ph ph-bell-ringing"></i>
+          <h3>Reminders that go out</h3>
+          <p>Set how many hours ahead, or switch them off.</p>
+        </article>
+        <article class="tile t-chg reveal" style="--d:.12s">
+          <i class="ph ph-arrows-clockwise"></i>
+          <h3>Reschedule and cancel by message</h3>
+          <p>Patients change their plans themselves, at any hour, without waiting for the clinic to open.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="channels" style="padding-top:0">
+    <div class="wrap tabs-grid">
+      <div class="reveal">
+        <h2>One agent, two front doors.</h2>
+        <div class="tablist" role="tablist" aria-label="Channel">
+          <button class="tab" role="tab" id="tab-wa" aria-selected="true" aria-controls="panel-wa">WhatsApp</button>
+          <button class="tab" role="tab" id="tab-web" aria-selected="false" aria-controls="panel-web" tabindex="-1">Website chat</button>
+        </div>
+        <div class="tabpanel" role="tabpanel" id="panel-wa" aria-labelledby="tab-wa">
+          <p>Patients already live on WhatsApp. They message your number and the agent handles the rest. Doctors can run things from the same app.</p>
+          <ul class="ticks">
+            <li><i class="ph ph-check-circle"></i>Identity comes from the sender's number</li>
+            <li><i class="ph ph-check-circle"></i>Doctors approve or reject with one reply</li>
+            <li><i class="ph ph-check-circle"></i>Staff can list pending requests any time</li>
+          </ul>
+        </div>
+        <div class="tabpanel" role="tabpanel" id="panel-web" aria-labelledby="tab-web" hidden>
+          <p>Paste one line into your clinic's website and a chat bubble appears. It runs in its own frame and never touches your site's data.</p>
+          <ul class="ticks">
+            <li><i class="ph ph-check-circle"></i>Same booking flow as WhatsApp</li>
+            <li><i class="ph ph-check-circle"></i>Visitors verify their number with a code</li>
+            <li><i class="ph ph-check-circle"></i>No CORS setup or plugins needed</li>
+          </ul>
+        </div>
+      </div>
+      <div class="reveal" style="--d:.1s">
+        <div class="code" id="code-wa" aria-label="Doctor commands on WhatsApp">
+          <small>Doctor's WhatsApp commands</small>
+          <div><span class="k">APPROVE</span> &lt;ref&gt;</div>
+          <div><span class="k">REJECT</span> &lt;ref&gt; &lt;reason&gt;</div>
+          <div><span class="k">CANCEL</span> &lt;ref&gt; &lt;reason&gt;</div>
+          <div><span class="k">PENDING</span></div>
+          <div><span class="k">CONNECT</span> <span class="c">sends a link for Google Calendar</span></div>
+        </div>
+        <div class="code" id="code-web" aria-label="Website embed snippet" hidden>
+          <small>Paste into your website</small>
+          <div>&lt;script <span class="k">src</span>="https://your-domain/widget.js"</div>
+          <div>&nbsp;&nbsp;<span class="k">data-tenant</span>="your-clinic" defer&gt;</div>
+          <div>&lt;/script&gt;</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" style="padding-top:0">
+    <div class="wrap">
+      <h2 class="trust-head reveal">Careful where it counts.</h2>
+      <div class="trust-grid">
+        <div class="trust-item reveal"><i class="ph ph-hand-heart"></i><div><h3>Bookings, not medicine</h3><p>The agent never gives medical advice. If someone describes an emergency, it points them to emergency services and hands the chat to your staff.</p></div></div>
+        <div class="trust-item reveal" style="--d:.08s"><i class="ph ph-eye-slash"></i><div><h3>Your calendar stays private</h3><p>Neem asks Google for free and busy time only. Personal events and their details are never read.</p></div></div>
+        <div class="trust-item reveal"><i class="ph ph-lock-key"></i><div><h3>Verified before it shares</h3><p>A web visitor cannot see a patient's profile until they prove the number with a code sent to that WhatsApp account.</p></div></div>
+        <div class="trust-item reveal" style="--d:.08s"><i class="ph ph-buildings"></i><div><h3>Each clinic kept separate</h3><p>Every clinic has its own workspace, settings and data. Adding another clinic does not mix them.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="faq" style="padding-top:0">
+    <div class="wrap faq-grid">
+      <h2 class="reveal">Questions clinics ask.</h2>
+      <div class="faq reveal" style="--d:.1s">
+        <details open><summary>Do patients need to install anything?<i class="ph ph-plus"></i></summary><p>No. They use WhatsApp as they already do, or the chat bubble on your website. Nothing to download and no account to create.</p></details>
+        <details><summary>What if the agent cannot help?<i class="ph ph-plus"></i></summary><p>It hands the conversation to your staff. Urgent or clinical questions are never answered by the agent.</p></details>
+        <details><summary>Can the doctor approve each booking?<i class="ph ph-plus"></i></summary><p>Yes. In approval mode the doctor receives a WhatsApp request and replies APPROVE or REJECT with a reason. Switch to instant booking whenever you like.</p></details>
+        <details><summary>Can patients pay when they book?<i class="ph ph-plus"></i></summary><p>Yes, through Razorpay. Your admin connects it, turns on payment for the services you choose and sets the amount. Patients pay inside WhatsApp and the slot is confirmed.</p></details>
+        <details><summary>Does it work with my existing calendar?<i class="ph ph-plus"></i></summary><p>It connects to Google Calendar. The doctor sends one message to authorize it, and revoking access pauses automatic confirmation.</p></details>
+        <details><summary>Can it answer questions about my clinic?<i class="ph ph-plus"></i></summary><p>Yes. You write the clinic information and the agent answers from that text, such as timings, location and services.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <section class="section cta" id="demo" style="padding-top:0">
+    <div class="wrap">
+      <div class="cta-box reveal">
+        <div>
+          <h2>See it run on your clinic.</h2>
+          <p>Tell us about your clinic and we will set up a walkthrough using your services and doctors.</p>
+        </div>
+        <form id="demo-form" novalidate>
+          <div class="field">
+            <label for="f-name">Your name</label>
+            <input id="f-name" name="name" autocomplete="name" required aria-describedby="e-name">
+            <span class="error" id="e-name" role="alert"></span>
+          </div>
+          <div class="field">
+            <label for="f-clinic">Clinic name</label>
+            <input id="f-clinic" name="clinic" autocomplete="organization" required aria-describedby="e-clinic">
+            <span class="error" id="e-clinic" role="alert"></span>
+          </div>
+          <div class="field">
+            <label for="f-phone">WhatsApp number</label>
+            <input id="f-phone" name="phone" type="tel" autocomplete="tel" required aria-describedby="h-phone e-phone">
+            <span class="helper" id="h-phone">Include the country code, for example +91.</span>
+            <span class="error" id="e-phone" role="alert"></span>
+          </div>
+          <button class="btn btn-primary" type="submit">Send request <i class="ph ph-arrow-right"></i></button>
+        </form>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot-in">
+    <a class="brand" href="#top"><span class="brand-mark"><i class="ph-fill ph-leaf"></i></span>Neem</a>
+    <nav class="foot-links" aria-label="Footer">
+      <a href="#how">How it works</a><a href="#features">Features</a><a href="#faq">FAQ</a>
+    </nav>
+    <span>Appointment booking for independent clinics.</span>
+  </div>
+</footer>
+
+<script src="main.js" defer></script>
+</body>
+</html>
