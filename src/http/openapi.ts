@@ -8,6 +8,7 @@ const bearer = [{ bearerAuth: [] }];
 const idParam = (description = "Appointment id (uuid)") => ({
   name: "id", in: "path", required: true, description, schema: { type: "string", format: "uuid" },
 });
+const slugParam = { name: "slug", in: "path", required: true, description: "Consultant slug", schema: { type: "string", example: "demo-clinic" } };
 const tenantParam = {
   name: "tenantSlug", in: "path", required: true, description: "Clinic slug", schema: { type: "string", example: "demo-clinic" },
 };
@@ -36,7 +37,7 @@ export const openApiSpec = {
     description: `A Gemini-powered booking agent for clinics, on WhatsApp and an embeddable web chat, backed by Postgres and Google Calendar.
 
 ## Who is who
-- **Admin** — the platform operator. Uses \`/v1/admin/*\` with the \`ADMIN_TOKEN\`. Onboards consultants and enables their Razorpay payments.
+- **Admin** — the platform operator. Uses \`/v1/admin/*\` with the \`ADMIN_TOKEN\`, or the admin console at \`/admin/\`. Onboards consultants and enables their Razorpay payments.
 - **Consultants** — clinics or any similar appointment-based place. Their team logs in at \`/v1/consultant/login\` and uses \`/v1/consultant/*\` (dashboard at \`/consultant/\`) for bookings, settings and fees.
 - **Users** — the end users who chat and book, over the web widget or WhatsApp (\`/v1/public/*\`). A user is identified by phone number; there is no registration.
 
@@ -244,9 +245,6 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
     "/v1/consultant/users/{id}": {
       get: { tags: ["consultant"], summary: "A user with their appointment history", security: bearer, parameters: [idParam("Patient id (uuid)")], responses: { 200: json({ type: "object", properties: { user: ref("User"), appointments: { type: "array", items: { type: "object" } } } }), 404: errorResponse("Not found") } },
     },
-    "/v1/consultant/resources": {
-      get: { tags: ["consultant"], summary: "List practitioners (and Google connection status)", security: bearer, responses: { 200: json({ type: "object", properties: { resources: { type: "array", items: { type: "object" } } } }) } },
-    },
     "/v1/consultant/resources/{id}/connect-link": {
       get: { tags: ["consultant", "google"], summary: "Get a 20-minute link for a doctor to connect Google Calendar", security: bearer, parameters: [idParam("Resource (practitioner) id")], responses: { 200: json({ type: "object", properties: { url: { type: "string" }, expiresInMinutes: { type: "integer" } } }), 400: errorResponse("Google not configured") } },
     },
@@ -261,6 +259,50 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
       get: { tags: ["google"], summary: "Google OAuth redirect target", parameters: [{ name: "code", in: "query", schema: { type: "string" } }, { name: "state", in: "query", schema: { type: "string" } }], responses: { 200: { description: "Connected" } } },
     },
 
+    "/v1/consultant/overview": {
+      get: { tags: ["consultant"], summary: "Home-page numbers: today, next 7 days, pending, awaiting payment, users, revenue, next appointments", security: bearer, responses: { 200: json({ type: "object", properties: { timezone: { type: "string" }, paymentsActive: { type: "boolean" }, today: { type: "integer" }, next7Days: { type: "integer" }, pendingApproval: { type: "integer" }, awaitingPayment: { type: "integer" }, syncFailed: { type: "integer" }, users: { type: "integer" }, newUsers30d: { type: "integer" }, revenue: { type: "object", properties: { todayPaise: { type: "integer" }, last30DaysPaise: { type: "integer" }, paidCount30d: { type: "integer" } } }, upcoming: { type: "array", items: { type: "object" } } } }), 401: errorResponse("Unauthorized") } },
+    },
+    "/v1/consultant/services": {
+      get: { tags: ["consultant"], summary: "List services (including turned-off ones)", security: bearer, responses: { 200: json({ type: "object", properties: { services: { type: "array", items: ref("Service") } } }) } },
+      post: { tags: ["consultant"], summary: "Add a service", security: bearer, requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["name", "durationMinutes"], properties: { name: { type: "string" }, durationMinutes: { type: "integer", minimum: 5, maximum: 480 }, bufferMinutes: { type: "integer", minimum: 0, maximum: 120, default: 0 } } } } } }, responses: { 201: json({ type: "object", properties: { service: ref("Service") } }), 400: errorResponse("Validation error") } },
+    },
+    "/v1/consultant/services/{id}": {
+      put: { tags: ["consultant"], summary: "Edit a service, or turn it off/on with `active` (services are never deleted: past appointments reference them)", security: bearer, parameters: [idParam("Service id (uuid)")], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, durationMinutes: { type: "integer" }, bufferMinutes: { type: "integer" }, active: { type: "boolean" } } } } } }, responses: { 200: json({ type: "object", properties: { service: ref("Service") } }), 404: errorResponse("Not found") } },
+    },
+    "/v1/consultant/resources": {
+      get: { tags: ["consultant"], summary: "List practitioners (including turned-off ones) and their Google Calendar status", security: bearer, responses: { 200: json({ type: "object", properties: { resources: { type: "array", items: ref("Practitioner") } } }) } },
+      post: { tags: ["consultant"], summary: "Add a practitioner", security: bearer, requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["name"], properties: { name: { type: "string" } } } } } }, responses: { 201: json({ type: "object", properties: { resource: ref("Practitioner") } }) } },
+    },
+    "/v1/consultant/resources/{id}": {
+      put: { tags: ["consultant"], summary: "Rename a practitioner or turn them off/on", security: bearer, parameters: [idParam("Practitioner id (uuid)")], requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, active: { type: "boolean" } } } } } }, responses: { 200: json({ type: "object", properties: { resource: ref("Practitioner") } }), 404: errorResponse("Not found") } },
+    },
+    "/v1/consultant/resources/{id}/availability": {
+      get: { tags: ["consultant"], summary: "A practitioner's weekly hours and date exceptions", security: bearer, parameters: [idParam("Practitioner id (uuid)")], responses: { 200: json(ref("Availability")), 404: errorResponse("Not found") } },
+      put: { tags: ["consultant"], summary: "Replace a practitioner's whole schedule", description: "One opening window per weekday (0 = Sunday); an unlisted weekday is closed. `exceptions` override a specific date: closed, or special hours.", security: bearer, parameters: [idParam("Practitioner id (uuid)")], requestBody: { required: true, content: { "application/json": { schema: ref("Availability"), example: { weekly: [{ weekday: 1, start: "09:00", end: "17:00" }], exceptions: [{ date: "2026-12-25", closed: true }] } } } }, responses: { 200: json(ref("Availability")), 400: errorResponse("Invalid schedule") } },
+    },
+    "/v1/consultant/slots": {
+      get: { tags: ["consultant"], summary: "Free times for a service and practitioner (what the reschedule dialog offers)", security: bearer, parameters: [{ name: "serviceId", in: "query", required: true, schema: { type: "string", format: "uuid" } }, { name: "resourceId", in: "query", required: true, schema: { type: "string", format: "uuid" } }, { name: "from", in: "query", required: true, schema: { type: "string", example: "2026-10-05" } }, { name: "days", in: "query", schema: { type: "integer", minimum: 1, maximum: 14, default: 7 } }], responses: { 200: json({ type: "object", properties: { timezone: { type: "string" }, slots: { type: "array", items: { type: "object", properties: { startAt: { type: "string" }, endAt: { type: "string" }, local: { type: "string" } } } } } }) } },
+    },
+    "/v1/consultant/slots/check": {
+      get: {
+        tags: ["consultant"], summary: "Check one chosen time: inside working hours? colliding with another booking?",
+        description: "Advisory, for the reschedule date-time picker. A consultant may book outside working hours, so `withinHours: false` only warns; an overlap (`conflicts`) is rejected on save by the no-overlap constraint. Pass `excludeAppointmentId` when moving an existing appointment so it doesn't collide with itself.",
+        security: bearer,
+        parameters: [
+          { name: "serviceId", in: "query", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "resourceId", in: "query", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "startAt", in: "query", required: true, schema: { type: "string", format: "date-time" }, example: "2026-10-06T14:35:00+05:30" },
+          { name: "excludeAppointmentId", in: "query", schema: { type: "string", format: "uuid" } },
+        ],
+        responses: { 200: json({ type: "object", properties: { startAt: { type: "string" }, endAt: { type: "string" }, inPast: { type: "boolean" }, withinHours: { type: "boolean" }, hours: { type: "object", nullable: true, properties: { start: { type: "string" }, end: { type: "string" } } }, conflicts: { type: "array", items: { type: "object", properties: { id: { type: "string" }, patientName: { type: "string", nullable: true }, startAt: { type: "string" }, endAt: { type: "string" } } } } } }), 400: errorResponse("Bad input"), 404: errorResponse("Unknown service or practitioner") },
+      },
+    },
+    "/v1/consultant/payments/transactions": {
+      get: { tags: ["consultant"], summary: "Payment history", security: bearer, parameters: [{ name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 500 } }], responses: { 200: json({ type: "object", properties: { transactions: { type: "array", items: { type: "object" } } } }) } },
+    },
+    "/v1/consultant/account/password": {
+      post: { tags: ["consultant"], summary: "Change your own password", security: bearer, requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["currentPassword", "newPassword"], properties: { currentPassword: { type: "string" }, newPassword: { type: "string", minLength: 8 } } } } } }, responses: { 200: { description: "Changed" }, 400: errorResponse("Wrong current password / too short") } },
+    },
     "/v1/consultant/payments": {
       get: { tags: ["consultant"], summary: "Payment settings (fees)", security: bearer, responses: { 200: json({ type: "object", properties: { payments: ref("ClinicPayments") } }), 401: errorResponse("Unauthorized") } },
       put: {
@@ -301,8 +343,38 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
         responses: { 200: json({ type: "object", properties: { paymentStatus: { type: "string", enum: ["created", "paid", "expired", "failed", "cancelled"] }, appointmentStatus: { type: "string" }, message: { type: "string", nullable: true } } }), 404: errorResponse("No payment for that appointment") },
       },
     },
+    "/v1/admin/overview": {
+      get: { tags: ["admin"], summary: "Admin: platform totals (also a cheap check that a token is valid)", security: [{ adminAuth: [] }], responses: { 200: json({ type: "object", properties: { consultants: { type: "integer" }, paymentsEnabled: { type: "integer" }, appointments30d: { type: "integer" }, users: { type: "integer" }, revenue30dPaise: { type: "integer" } } }), 401: errorResponse("Bad admin token"), 403: errorResponse("Admin API disabled (no ADMIN_TOKEN)") } },
+    },
+    "/v1/admin/tenants/{slug}": {
+      get: { tags: ["admin"], summary: "Admin: one consultant", security: [{ adminAuth: [] }], parameters: [slugParam], responses: { 200: json({ type: "object", properties: { consultant: ref("AdminConsultant") } }), 404: errorResponse("Unknown consultant") } },
+      put: {
+        tags: ["admin"], summary: "Admin: edit a consultant's name, timezone or WhatsApp number id", security: [{ adminAuth: [] }], parameters: [slugParam],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, timezone: { type: "string", example: "Asia/Kolkata" }, whatsappPhoneNumberId: { type: "string", nullable: true } } } } } },
+        responses: { 200: json({ type: "object", properties: { consultant: ref("AdminConsultant") } }), 400: errorResponse("Validation error") },
+      },
+    },
+    "/v1/admin/tenants/{slug}/users": {
+      get: { tags: ["admin"], summary: "Admin: a consultant's logins", security: [{ adminAuth: [] }], parameters: [slugParam], responses: { 200: json({ type: "object", properties: { users: { type: "array", items: ref("ConsultantLogin") } } }) } },
+      post: {
+        tags: ["admin"], summary: "Admin: add a login for a consultant's team", description: "An email can belong to only one consultant, because login looks people up by email.", security: [{ adminAuth: [] }], parameters: [slugParam],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["email", "password"], properties: { email: { type: "string" }, password: { type: "string", minLength: 8 } } } } } },
+        responses: { 201: json({ type: "object", properties: { user: ref("ConsultantLogin") } }), 400: errorResponse("Validation error / email already used") },
+      },
+    },
+    "/v1/admin/tenants/{slug}/users/{id}/password": {
+      post: { tags: ["admin"], summary: "Admin: reset a consultant login's password", security: [{ adminAuth: [] }], parameters: [slugParam, idParam("Login id (uuid)")], requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["password"], properties: { password: { type: "string", minLength: 8 } } } } } }, responses: { 200: { description: "Changed" }, 404: errorResponse("Login not found") } },
+    },
+    "/v1/admin/tenants/{slug}/users/{id}": {
+      delete: { tags: ["admin"], summary: "Admin: remove a login (never the last one)", security: [{ adminAuth: [] }], parameters: [slugParam, idParam("Login id (uuid)")], responses: { 204: { description: "Removed" }, 400: errorResponse("Can't remove the last login"), 404: errorResponse("Login not found") } },
+    },
     "/v1/admin/tenants": {
-      get: { tags: ["admin"], summary: "Admin: list consultants and their payment status", security: [{ adminAuth: [] }], responses: { 200: json({ type: "object", properties: { tenants: { type: "array", items: ref("AdminPayments") } } }), 401: errorResponse("Bad platform token") } },
+      post: {
+        tags: ["admin"], summary: "Admin: onboard a consultant (clinic) with its first login", security: [{ adminAuth: [] }],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["name", "slug", "timezone", "owner"], properties: { name: { type: "string" }, slug: { type: "string", example: "sunrise-dental" }, timezone: { type: "string", example: "Asia/Kolkata" }, confirmationPolicy: { type: "string", enum: ["instant", "staff_approval"], default: "staff_approval" }, whatsappPhoneNumberId: { type: "string", nullable: true }, owner: { type: "object", required: ["email", "password"], properties: { email: { type: "string" }, password: { type: "string", minLength: 8 } } } } } } } },
+        responses: { 201: json({ type: "object", properties: { consultant: ref("AdminConsultant") } }), 400: errorResponse("Validation error / slug or email already used"), 401: errorResponse("Bad admin token") },
+      },
+      get: { tags: ["admin"], summary: "Admin: list consultants and their payment status", security: [{ adminAuth: [] }], responses: { 200: json({ type: "object", properties: { tenants: { type: "array", items: ref("AdminConsultant") } } }), 401: errorResponse("Bad platform token") } },
     },
     "/v1/admin/tenants/{slug}/payments": {
       get: { tags: ["admin"], summary: "Admin: a consultant's Razorpay setup", security: [{ adminAuth: [] }], parameters: [{ name: "slug", in: "path", required: true, schema: { type: "string" } }], responses: { 200: json({ type: "object", properties: { payments: ref("AdminPayments") } }), 404: errorResponse("Unknown clinic") } },
@@ -340,6 +412,21 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
       ClinicPayments: {
         type: "object",
         properties: { available: { type: "boolean", description: "The admin has enabled payments for this consultant" }, collectPayments: { type: "boolean" }, currency: { type: "string", example: "INR" }, pricing: ref("Pricing"), note: { type: "string" } },
+      },
+      Service: { type: "object", properties: { id: { type: "string", format: "uuid" }, name: { type: "string" }, durationMinutes: { type: "integer" }, bufferMinutes: { type: "integer" }, active: { type: "boolean" } } },
+      Practitioner: { type: "object", properties: { id: { type: "string", format: "uuid" }, name: { type: "string" }, active: { type: "boolean" }, googleConnectionStatus: { type: "string", enum: ["disconnected", "connected", "error"] }, googleCalendarId: { type: "string", nullable: true } } },
+      Availability: {
+        type: "object", required: ["weekly", "exceptions"],
+        properties: {
+          weekly: { type: "array", items: { type: "object", required: ["weekday", "start", "end"], properties: { weekday: { type: "integer", minimum: 0, maximum: 6 }, start: { type: "string", example: "09:00" }, end: { type: "string", example: "17:00" } } } },
+          exceptions: { type: "array", items: { type: "object", required: ["date", "closed"], properties: { date: { type: "string", example: "2026-12-25" }, closed: { type: "boolean" }, start: { type: "string" }, end: { type: "string" } } } },
+        },
+      },
+      ConsultantLogin: { type: "object", properties: { id: { type: "string", format: "uuid" }, email: { type: "string" }, createdAt: { type: "string", format: "date-time" } } },
+      AdminConsultant: {
+        type: "object",
+        description: "A consultant as the admin sees it: identity, booking flow, payments setup and usage.",
+        properties: { slug: { type: "string" }, name: { type: "string" }, timezone: { type: "string" }, confirmationPolicy: { type: "string", enum: ["instant", "staff_approval"] }, whatsappPhoneNumberId: { type: "string", nullable: true }, createdAt: { type: "string", format: "date-time" }, paymentsEnabled: { type: "boolean" }, razorpayKeyId: { type: "string", nullable: true }, razorpayMode: { type: "string", enum: ["test", "live"], nullable: true }, keySecretConfigured: { type: "boolean" }, webhookSecretConfigured: { type: "boolean" }, consultantCollectsPayments: { type: "boolean" }, webhookUrl: { type: "string" }, counts: { type: "object", properties: { appointments: { type: "integer" }, users: { type: "integer" }, logins: { type: "integer" } } } },
       },
       AdminPayments: {
         type: "object",
@@ -399,6 +486,7 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           confirmationPolicy: { type: "string", enum: ["instant", "staff_approval"], description: "instant = direct booking; staff_approval = doctor must accept." },
           staffWhatsappNumber: { type: "string", nullable: true, description: "Digits with country code. Gets approval requests and may send APPROVE/REJECT commands." },
           reminderHoursBefore: { type: "integer", description: "0 disables reminders." },
+          slotIntervalMinutes: { type: "integer", minimum: 5, maximum: 240, default: 5, description: "Minutes between offered start times (5 → 9:00, 9:05, 9:10…; 30 → 9:00, 9:30…). Also the step in the dashboard's reschedule time picker." },
           faqText: { type: "string", nullable: true, description: "Clinic info the agent may answer questions from." },
           whatsappPhoneNumberId: { type: "string", nullable: true },
         },
@@ -409,6 +497,7 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
           confirmationPolicy: { type: "string", enum: ["instant", "staff_approval"] },
           staffWhatsappNumber: { type: "string", nullable: true, example: "+91 98765 43210" },
           reminderHoursBefore: { type: "integer", minimum: 0, maximum: 168 },
+          slotIntervalMinutes: { type: "integer", minimum: 5, maximum: 240 },
           faqText: { type: "string", nullable: true, maxLength: 4000 },
           whatsappPhoneNumberId: { type: "string", nullable: true },
         },

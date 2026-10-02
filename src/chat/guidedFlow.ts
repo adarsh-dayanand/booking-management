@@ -3,6 +3,7 @@ import { loadConversation, saveConversation } from "./conversationStore";
 import { loadTenantConfig } from "../booking/tenant";
 import * as booking from "../booking/booking";
 import { SlotConflictError } from "../errors";
+import { menuSlots } from "../booking/slotPicker";
 import { appendPaymentLink, type PaymentOffer } from "../payments/offer";
 import { config as appConfig } from "../config";
 import { formatRupees, paymentActive, quoteFee } from "../payments/pricing";
@@ -176,7 +177,7 @@ async function presentSlots(
   const rangeStart = new Date();
   const rangeEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
   const slots = await booking.generateAvailableSlots(config, state.resourceId!, state.serviceId!, rangeStart, rangeEnd);
-  const offered = slots.slice(0, 8);
+  const offered = menuSlots(slots, config.tenant.timezone); // a few well-spaced times per day, not eight in a row
 
   if (offered.length === 0) {
     await saveState(config.tenant.id, channel, externalId, { step: "AWAITING_SERVICE" });

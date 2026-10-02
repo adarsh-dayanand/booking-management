@@ -61,7 +61,9 @@ export function computeCandidateSlots(
   const tz = config.tenant.timezone;
   const now = options.now ?? new Date();
   const minNotice = options.minNoticeMinutes ?? DEFAULT_MIN_NOTICE_MINUTES;
-  const granularity = options.slotGranularityMinutes ?? service.durationMinutes + service.bufferMinutes;
+  // Start times are offered every `slotIntervalMinutes` (the consultant's setting); a visit's own length only decides
+  // whether it fits before closing and whether it collides with another booking.
+  const granularity = options.slotGranularityMinutes ?? config.tenant.slotIntervalMinutes ?? service.durationMinutes + service.bufferMinutes;
   const earliestAllowed = DateTime.fromJSDate(now, { zone: tz }).plus({ minutes: minNotice });
 
   const rules = config.availabilityRules.filter((r) => r.resourceId === resourceId);
@@ -98,6 +100,29 @@ export function computeCandidateSlots(
   }
 
   return slots;
+}
+
+/**
+ * Whether a visit starting at `start` sits inside the practitioner's opening hours for that local day (a date
+ * exception beats the weekly rule). Used to warn a consultant who deliberately books outside hours; never blocks.
+ */
+export function openingWindowFor(
+  config: TenantConfig,
+  resourceId: string,
+  service: Service,
+  start: Date
+): { within: boolean; window: { start: string; end: string } | null } {
+  const local = DateTime.fromJSDate(start, { zone: config.tenant.timezone });
+  const rules = config.availabilityRules.filter((r) => r.resourceId === resourceId);
+  const rule = rules.find((r) => r.specificDate === local.toISODate()) ?? rules.find((r) => r.weekday === local.weekday % 7);
+  if (!rule || rule.isClosed || !rule.startTime || !rule.endTime) return { within: false, window: null };
+  const minutes = (hhmmss: string) => Number(hhmmss.slice(0, 2)) * 60 + Number(hhmmss.slice(3, 5));
+  const startMin = local.hour * 60 + local.minute;
+  const endMin = startMin + service.durationMinutes;
+  return {
+    within: startMin >= minutes(rule.startTime) && endMin <= minutes(rule.endTime),
+    window: { start: rule.startTime.slice(0, 5), end: rule.endTime.slice(0, 5) },
+  };
 }
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {

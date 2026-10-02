@@ -4,4 +4,3 @@ dist
 *.local
 coverage
 .DS_Store
-public/consultant

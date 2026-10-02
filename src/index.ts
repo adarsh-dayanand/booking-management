@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import fs from "fs";
 import path from "path";
 import swaggerUiDist from "swagger-ui-dist";
 import express, { NextFunction, Request, Response } from "express";
@@ -37,10 +38,24 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Old bookmark of the vanilla dashboard -> the React app (built from web/ into public/consultant/).
+// Old bookmark of the first (vanilla) dashboard -> the React app.
 app.get("/consultant.html", (_req, res) => res.redirect(301, "/consultant/"));
-// The embeddable widget snippet + iframe chat UI + the consultant dashboard.
+// If the dashboards haven't been built, say so instead of a bare 404 (npm run dev / start normally builds them first).
+const webDist = path.join(__dirname, "..", "web", "dist");
+app.get(["/consultant", "/consultant/*", "/admin", "/admin/*"], (req, res, next) => {
+  if (fs.existsSync(path.join(webDist, "consultant", "index.html")) && fs.existsSync(path.join(webDist, "admin", "index.html"))) return next();
+  res.status(503).type("html").send(`<!doctype html><meta charset="utf-8"><title>Dashboards not built</title>
+<body style="font:16px/1.6 system-ui;max-width:560px;margin:12vh auto;padding:0 20px;color:#0d1512">
+<h1 style="font-size:1.5rem">The dashboards aren't built yet</h1>
+<p>The consultant dashboard and admin console are React apps that need a one-time build:</p>
+<pre style="background:#eef5f2;padding:12px 14px;border-radius:12px">npm run build:web</pre>
+<p>Then reload this page. (<code>npm run dev</code> and <code>npm start</code> do this automatically.)</p></body>`);
+});
+
+// The embeddable widget snippet + iframe chat UI.
 app.use(express.static(path.join(__dirname, "..", "public")));
+// The React apps (built from web/): the consultant dashboard at /consultant/ and the admin console at /admin/.
+app.use(express.static(webDist));
 
 if (config.docsEnabled) {
   app.get("/openapi.json", (_req, res) => res.json(openApiSpec));

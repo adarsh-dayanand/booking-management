@@ -4,6 +4,7 @@ import * as booking from "../booking/booking";
 import { identityPatient, identityPhone, isoDate, isoDateTime, label, NOT_VERIFIED, ownsAppointment, uuid, type AgentSession, type Tool, type ToolContext, type ToolResult } from "./toolKit";
 import { paymentTools } from "./paymentTools";
 import { paymentActive, quoteFee, formatRupees } from "../payments/pricing";
+import { groupByDay, nearestTo, spreadEvenly } from "../booking/slotPicker";
 import { pool } from "../lib/db";
 import { AppError, SlotConflictError } from "../errors";
 import { notifyStaff } from "../channels/notify";
@@ -61,6 +62,7 @@ const tools: Tool[] = [
           fromDate: { type: "string", description: "YYYY-MM-DD, default today" },
           toDate: { type: "string", description: "YYYY-MM-DD, default two weeks after fromDate (max 21 days)" },
           partOfDay: { type: "string", enum: ["morning", "afternoon", "evening"] },
+          nearTime: { type: "string", description: "HH:MM (24h, clinic time). Return the free times closest to this time of day, e.g. 17:00 when the patient asks for 'around 5pm'." },
         },
         required: ["serviceId"],
       },
@@ -73,6 +75,7 @@ const tools: Tool[] = [
           fromDate: isoDate.optional(),
           toDate: isoDate.optional(),
           partOfDay: z.enum(["morning", "afternoon", "evening"]).optional(),
+          nearTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "use HH:MM").optional(),
         })
         .parse(raw);
       const tz = ctx.config.tenant.timezone;
@@ -109,14 +112,11 @@ const tools: Tool[] = [
       }
       found.sort((a, b) => a.startAt.localeCompare(b.startAt));
 
+      // Times can be offered as often as every 5 minutes, so show a few well-spread (or nearest-to-requested) ones per day.
       const singleDay = from.hasSame(to, "day");
-      const perDay = new Map<string, number>();
-      const picked = found
-        .filter((s) => {
-          const n = (perDay.get(s.day) ?? 0) + 1;
-          perDay.set(s.day, n);
-          return n <= (singleDay ? 8 : 4);
-        })
+      const cap = singleDay ? 8 : 4;
+      const picked = groupByDay(found, tz)
+        .flatMap((day) => (args.nearTime ? nearestTo(day, tz, args.nearTime, cap) : spreadEvenly(day, cap)))
         .slice(0, 12)
         .map(({ day: _day, ...rest }) => rest);
       return picked.length ? { slots: picked } : { slots: [], note: "No free times in that range. Offer to search other dates." };

@@ -1,0 +1,22 @@
+# Neem
+
+> Neem is an appointment booking assistant for independent clinics. It replies to patients on WhatsApp and website chat, books them into Google Calendar, takes Razorpay payment in the chat, and sends reminders.
+
+## What it does
+
+- Patients message the clinic's WhatsApp number or a website chat bubble and book in their own words. No app, form or account.
+- Offers only times that are free on the doctor's Google Calendar, for the right doctor and service. Only free/busy time is read, never event titles.
+- Booking policy per clinic: instant confirmation, or doctor approval by replying APPROVE or REJECT on WhatsApp.
+- Optional payment through Razorpay inside the chat. A platform admin connects Razorpay, chooses which services need payment and sets the amount; the slot is confirmed after payment.
+- Patients can reschedule or cancel by message. Reminders go out a configurable number of hours before the visit.
+- Patients are identified by phone number. Web visitors verify with a code sent on WhatsApp before seeing any profile.
+- Each clinic has its own separate workspace, settings and data.
+- The agent handles bookings only. It gives no medical advice and hands emergencies and unanswerable questions to clinic staff.
+
+## Who it is for
+
+Small and independent clinics that lose bookings because nobody can answer the phone.
+
+## Pages
+
+- [Home](https://neem.example/): overview, how it works, features, channels, FAQ and demo request

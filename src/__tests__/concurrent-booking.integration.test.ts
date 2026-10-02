@@ -35,7 +35,7 @@ function buildConfig(): TenantConfig {
       whatsappPhoneNumberId: null,
       staffWhatsappNumber: null,
       reminderHoursBefore: 24,
-      faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null,
+      faqText: null, slotIntervalMinutes: 5, paymentsEnabled: false, collectPayments: false, pricing: null,
     },
     services: [{ id: serviceId, tenantId, name: "Consult", durationMinutes: 30, bufferMinutes: 0, active: true }],
     resources: [

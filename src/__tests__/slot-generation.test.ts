@@ -13,7 +13,7 @@ function buildConfig(timezone: string, rules: AvailabilityRule[]): TenantConfig 
       whatsappPhoneNumberId: null,
       staffWhatsappNumber: null,
       reminderHoursBefore: 24,
-      faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null,
+      faqText: null, slotIntervalMinutes: 30, paymentsEnabled: false, collectPayments: false, pricing: null,
     },
     services: [],
     resources: [],
@@ -94,5 +94,32 @@ describe("computeCandidateSlots", () => {
       now: FAR_PAST_NOW,
     });
     expect(slots).toEqual([{ startAt: "2026-11-02T14:00:00.000Z", endAt: "2026-11-02T14:30:00.000Z" }]);
+  });
+
+  describe("slot interval (the consultant's setting)", () => {
+    const withInterval = (minutes: number) => {
+      const config = buildConfig("Asia/Kolkata", [rule({ weekday: 1, startTime: "09:00", endTime: "10:00" })]);
+      config.tenant.slotIntervalMinutes = minutes;
+      return computeCandidateSlots(config, "res1", service, MONDAY_START, MONDAY_END, { minNoticeMinutes: 0, now: FAR_PAST_NOW });
+    };
+    const localTimes = (slots: { startAt: string }[]) => slots.map((s) => new Date(new Date(s.startAt).getTime() + 330 * 60_000).toISOString().slice(11, 16));
+
+    it("offers a start every 5 minutes, as long as the visit still fits before closing", () => {
+      // 30-minute visit, closing at 10:00: the last start is 09:30
+      expect(localTimes(withInterval(5))).toEqual(["09:00", "09:05", "09:10", "09:15", "09:20", "09:25", "09:30"]);
+    });
+
+    it("follows whatever interval the consultant chose", () => {
+      expect(localTimes(withInterval(15))).toEqual(["09:00", "09:15", "09:30"]);
+      expect(localTimes(withInterval(20))).toEqual(["09:00", "09:20"]);
+      expect(localTimes(withInterval(60))).toEqual(["09:00"]);
+    });
+
+    it("an explicit option still overrides the tenant setting", () => {
+      const config = buildConfig("Asia/Kolkata", [rule({ weekday: 1, startTime: "09:00", endTime: "10:00" })]);
+      config.tenant.slotIntervalMinutes = 5;
+      const slots = computeCandidateSlots(config, "res1", service, MONDAY_START, MONDAY_END, { minNoticeMinutes: 0, now: FAR_PAST_NOW, slotGranularityMinutes: 30 });
+      expect(slots).toHaveLength(2);
+    });
   });
 });

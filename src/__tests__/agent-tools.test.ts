@@ -39,7 +39,7 @@ const RESOURCE = "33333333-3333-4333-8333-333333333333";
 
 const ctx = (channel: "web" | "whatsapp", externalId: string, session: AgentSession = {}): ToolContext => ({
   config: {
-    tenant: { id: "t1", name: "C", slug: "c", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null },
+    tenant: { id: "t1", name: "C", slug: "c", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: null, staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, slotIntervalMinutes: 5, paymentsEnabled: false, collectPayments: false, pricing: null },
     services: [], resources: [], availabilityRules: [],
   },
   channel,
@@ -240,5 +240,43 @@ describe("payments in the chat", () => {
     const r = await executeTool("check_payment_status", { appointmentId: APPT }, c);
     expect(r).toMatchObject({ paymentStatus: "unpaid", paymentUrl: offer.url });
     expect(c.outbox.payment?.url).toBe(offer.url);
+  });
+});
+
+describe("offering times when slots are 5 minutes apart", () => {
+  const base = ctx("whatsapp", "919876543210");
+  const withServices = {
+    ...base,
+    config: {
+      ...base.config,
+      tenant: { ...base.config.tenant, timezone: "Asia/Kolkata" },
+      services: [{ id: SERVICE, tenantId: "t1", name: "Consult", durationMinutes: 30, bufferMinutes: 0, active: true }],
+      resources: [{ id: RESOURCE, tenantId: "t1", name: "Doc", googleCalendarId: null, googleRefreshTokenEncrypted: null, googleConnectionStatus: "disconnected" as const, active: true }],
+    },
+  };
+  // every 5 minutes, 09:00-16:30 IST on one far-future day
+  const daySlots = Array.from({ length: 91 }, (_, i) => {
+    const t = Date.parse("2099-01-07T09:00:00+05:30") + i * 5 * 60_000;
+    return { startAt: new Date(t).toISOString(), endAt: new Date(t + 30 * 60_000).toISOString() };
+  });
+  const args = { serviceId: SERVICE, fromDate: "2099-01-07", toDate: "2099-01-07" };
+  const times = (r: any) => r.slots.map((s: any) => s.local.slice(-5));
+
+  it("spreads the offered times over the day instead of listing the first few minutes", async () => {
+    generateAvailableSlots.mockResolvedValue(daySlots);
+    const r = await executeTool("get_available_slots", args, withServices);
+    expect(r.slots).toHaveLength(8);
+    expect(times(r)[0]).toBe("09:00");
+    expect(times(r).at(-1)).toBe("16:30");
+  });
+
+  it("returns the times nearest to a requested time of day", async () => {
+    generateAvailableSlots.mockResolvedValue(daySlots);
+    const r = await executeTool("get_available_slots", { ...args, nearTime: "13:00" }, withServices);
+    expect(times(r)).toEqual(["12:40", "12:45", "12:50", "12:55", "13:00", "13:05", "13:10", "13:15"]);
+  });
+
+  it("rejects a malformed nearTime", async () => {
+    expect(await executeTool("get_available_slots", { ...args, nearTime: "5pm" }, withServices)).toMatchObject({ error: expect.stringContaining("Invalid arguments") });
   });
 });

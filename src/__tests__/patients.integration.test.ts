@@ -41,7 +41,7 @@ beforeAll(async () => {
   const serviceId = (await pool.query(`INSERT INTO services (tenant_id, name, duration_minutes) VALUES ($1, 'Consult', 30) RETURNING id`, [tenantId])).rows[0].id;
   const resourceId = (await pool.query(`INSERT INTO resources (tenant_id, name) VALUES ($1, 'Doc') RETURNING id`, [tenantId])).rows[0].id;
   cfg = {
-    tenant: { id: tenantId, name: "Patients Test", slug: "x", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: "pn1", staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, paymentsEnabled: false, collectPayments: false, pricing: null },
+    tenant: { id: tenantId, name: "Patients Test", slug: "x", timezone: "UTC", confirmationPolicy: "instant", whatsappPhoneNumberId: "pn1", staffWhatsappNumber: null, reminderHoursBefore: 24, faqText: null, slotIntervalMinutes: 5, paymentsEnabled: false, collectPayments: false, pricing: null },
     services: [{ id: serviceId, tenantId, name: "Consult", durationMinutes: 30, bufferMinutes: 0, active: true }],
     resources: [{ id: resourceId, tenantId, name: "Doc", googleCalendarId: null, googleRefreshTokenEncrypted: null, googleConnectionStatus: "disconnected", active: true }],
     availabilityRules: [],

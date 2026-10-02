@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { DateTime } from "luxon";
 import { z } from "zod";
 import { login, requireAuth } from "../auth";
 import * as booking from "../../booking/booking";
@@ -12,6 +13,7 @@ import { rateLimit } from "../../lib/rateLimit";
 import { isPgError } from "../../lib/db";
 import { loadTenantConfigById } from "../../booking/tenant";
 import { consultantPaymentsRouter } from "./consultantPayments";
+import { consultantManageRouter } from "./consultantManage";
 
 export const consultantRouter = Router();
 
@@ -33,6 +35,7 @@ consultantRouter.use(requireAuth);
 // staff can't even address another clinic's data by changing a path segment.
 
 consultantRouter.use("/payments", consultantPaymentsRouter);
+consultantRouter.use(consultantManageRouter);
 
 consultantRouter.get("/appointments", async (req, res, next) => {
   try {
@@ -46,22 +49,10 @@ consultantRouter.get("/appointments", async (req, res, next) => {
        JOIN resources r ON r.id = a.resource_id
        LEFT JOIN payments pay ON pay.appointment_id = a.id
        WHERE a.tenant_id = $1 AND ($2::text IS NULL OR a.status = $2)
-       ORDER BY a.start_at ASC`,
+       ORDER BY a.start_at ASC LIMIT 1000`,
       [req.consultant!.tenantId, status ?? null]
     );
     res.json({ appointments: result.rows });
-  } catch (err) {
-    next(err);
-  }
-});
-
-consultantRouter.get("/resources", async (req, res, next) => {
-  try {
-    const config = await loadTenantConfigById(req.consultant!.tenantId);
-    res.json({
-      // never expose the stored (encrypted) Google refresh token
-      resources: config.resources.map(({ googleRefreshTokenEncrypted: _token, ...safe }) => safe),
-    });
   } catch (err) {
     next(err);
   }
@@ -133,6 +124,7 @@ function settingsView(t: any) {
     confirmationPolicy: t.confirmation_policy,
     staffWhatsappNumber: t.staff_whatsapp_number,
     reminderHoursBefore: t.reminder_hours_before,
+    slotIntervalMinutes: t.slot_interval_minutes,
     faqText: t.faq_text,
     whatsappPhoneNumberId: t.whatsapp_phone_number_id,
   };
@@ -149,9 +141,12 @@ consultantRouter.get("/settings", async (req, res, next) => {
 
 const settingsSchema = z
   .object({
+    name: z.string().trim().min(2).max(100),
+    timezone: z.string().refine((tz) => DateTime.local().setZone(tz).isValid, "not a valid IANA timezone (e.g. Asia/Kolkata)"),
     confirmationPolicy: z.enum(["instant", "staff_approval"]),
     staffWhatsappNumber: z.string().nullable().transform((v) => (v ? digitsOnly(v) : null)).refine((v) => v === null || (v.length >= 8 && v.length <= 15), "staffWhatsappNumber must be 8-15 digits including country code"),
     reminderHoursBefore: z.number().int().min(0).max(168),
+    slotIntervalMinutes: z.number().int().min(5, "slot interval must be at least 5 minutes").max(240),
     faqText: z.string().max(4000).nullable(),
     whatsappPhoneNumberId: z.string().min(1).max(64).nullable(),
   })
@@ -161,9 +156,12 @@ consultantRouter.put("/settings", async (req, res, next) => {
   try {
     const patch = settingsSchema.parse(req.body ?? {});
     const columns: Record<string, string> = {
+      name: "name",
+      timezone: "timezone",
       confirmationPolicy: "confirmation_policy",
       staffWhatsappNumber: "staff_whatsapp_number",
       reminderHoursBefore: "reminder_hours_before",
+      slotIntervalMinutes: "slot_interval_minutes",
       faqText: "faq_text",
       whatsappPhoneNumberId: "whatsapp_phone_number_id",
     };

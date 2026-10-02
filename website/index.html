@@ -4,15 +4,75 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Neem | Appointment booking on WhatsApp for clinics</title>
-<meta name="description" content="Neem answers your patients on WhatsApp, books them into Google Calendar and takes payment in the chat, so no booking is lost to a busy phone.">
+<meta name="description" content="Neem is a WhatsApp booking assistant for clinics. It answers patients instantly, books into Google Calendar and takes Razorpay payment in the chat.">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
 <meta name="theme-color" content="#fcfdfc">
+<link rel="canonical" href="https://neem.example/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230d1512'/%3E%3Cpath d='M16 6c-6 2-9 7-8 13 1 3 3 5 8 7 5-2 7-4 8-7 1-6-2-11-8-13z' fill='%2334d399'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Neem">
+<meta property="og:title" content="Neem | Appointment booking on WhatsApp for clinics">
+<meta property="og:description" content="Never miss a patient who wants to book. Neem answers on WhatsApp, books into Google Calendar and takes payment in the chat.">
+<meta property="og:url" content="https://neem.example/">
+<meta property="og:locale" content="en_IN">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Neem | Appointment booking on WhatsApp for clinics">
+<meta name="twitter:description" content="Neem answers patients on WhatsApp, books them into Google Calendar and takes Razorpay payment in the chat.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://neem.example/#website",
+      "url": "https://neem.example/",
+      "name": "Neem",
+      "inLanguage": "en"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://neem.example/#app",
+      "name": "Neem",
+      "applicationCategory": "BusinessApplication",
+      "operatingSystem": "Web, WhatsApp",
+      "url": "https://neem.example/",
+      "description": "Neem is an appointment booking assistant for independent clinics. It replies to patients on WhatsApp and website chat, books slots into Google Calendar, takes Razorpay payment in the chat, sends reminders and supports rescheduling and cancellation by message.",
+      "featureList": [
+        "Appointment booking on WhatsApp and website chat",
+        "Google Calendar integration using free and busy time only",
+        "Razorpay payments inside the chat",
+        "Instant booking or doctor approval mode",
+        "Appointment reminders",
+        "Reschedule and cancel by message",
+        "Separate workspace for each clinic"
+      ],
+      "audience": { "@type": "Audience", "audienceType": "Independent clinics and doctors" }
+    }
+  ]
+}
+</script>
 <link rel="preload" href="assets/fonts/geist-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="styles.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {"@type":"Question","name":"What is Neem?","acceptedAnswer":{"@type":"Answer","text":"Neem is an appointment booking assistant for clinics. It replies to patients on WhatsApp or website chat, offers only the times that are free on your Google Calendar, takes payment through Razorpay if you want it, and confirms the booking."}},
+    {"@type":"Question","name":"Do patients need to install anything?","acceptedAnswer":{"@type":"Answer","text":"No. They use WhatsApp as they already do, or the chat bubble on your website. Nothing to download and no account to create."}},
+    {"@type":"Question","name":"What if the agent cannot help?","acceptedAnswer":{"@type":"Answer","text":"It hands the conversation to your staff. Urgent or clinical questions are never answered by the agent."}},
+    {"@type":"Question","name":"Can the doctor approve each booking?","acceptedAnswer":{"@type":"Answer","text":"Yes. In approval mode the doctor receives a WhatsApp request and replies APPROVE or REJECT with a reason. Switch to instant booking whenever you like."}},
+    {"@type":"Question","name":"Can patients pay when they book?","acceptedAnswer":{"@type":"Answer","text":"Yes, through Razorpay. Your admin connects it, turns on payment for the services you choose and sets the amount. Patients pay inside WhatsApp and the slot is confirmed."}},
+    {"@type":"Question","name":"Does it work with my existing calendar?","acceptedAnswer":{"@type":"Answer","text":"It connects to Google Calendar. The doctor sends one message to authorize it, and revoking access pauses automatic confirmation."}},
+    {"@type":"Question","name":"Can it answer questions about my clinic?","acceptedAnswer":{"@type":"Answer","text":"Yes. You write the clinic information and the agent answers from that text, such as timings, location and services."}}
+  ]
+}
+</script>
 <script>document.documentElement.classList.add("js");</script>
 </head>
 <body>
 
-<header class="nav">
+<header class="nav" role="banner">
   <div class="wrap nav-in">
     <a class="brand" href="#top" aria-label="Neem home"><span class="brand-mark"><i class="ph-fill ph-leaf"></i></span>Neem</a>
     <nav class="nav-links" aria-label="Primary">
@@ -31,7 +91,7 @@
     <div class="wrap hero-grid">
       <div>
         <h1 class="rise" style="--d:.05s">Never miss a patient who wants to book.</h1>
-        <p class="lead rise" style="--d:.15s">Neem answers patients on WhatsApp, books them into your Google Calendar, and takes payment in the chat.</p>
+        <p class="lead rise" style="--d:.15s">Neem is a WhatsApp appointment booking assistant for clinics. It answers patients, books them into your Google Calendar, and takes payment in the chat.</p>
         <div class="cta-row rise" style="--d:.25s">
           <a class="btn btn-primary" href="#demo">Book a demo <i class="ph ph-arrow-right"></i></a>
           <a class="btn btn-ghost" href="#how">See how it works</a>
@@ -226,7 +286,8 @@
     <div class="wrap faq-grid">
       <h2 class="reveal">Questions clinics ask.</h2>
       <div class="faq reveal" style="--d:.1s">
-        <details open><summary>Do patients need to install anything?<i class="ph ph-plus"></i></summary><p>No. They use WhatsApp as they already do, or the chat bubble on your website. Nothing to download and no account to create.</p></details>
+        <details open><summary>What is Neem?<i class="ph ph-plus"></i></summary><p>Neem is an appointment booking assistant for clinics. It replies to patients on WhatsApp or website chat, offers only the times that are free on your Google Calendar, takes payment through Razorpay if you want it, and confirms the booking.</p></details>
+        <details><summary>Do patients need to install anything?<i class="ph ph-plus"></i></summary><p>No. They use WhatsApp as they already do, or the chat bubble on your website. Nothing to download and no account to create.</p></details>
         <details><summary>What if the agent cannot help?<i class="ph ph-plus"></i></summary><p>It hands the conversation to your staff. Urgent or clinical questions are never answered by the agent.</p></details>
         <details><summary>Can the doctor approve each booking?<i class="ph ph-plus"></i></summary><p>Yes. In approval mode the doctor receives a WhatsApp request and replies APPROVE or REJECT with a reason. Switch to instant booking whenever you like.</p></details>
         <details><summary>Can patients pay when they book?<i class="ph ph-plus"></i></summary><p>Yes, through Razorpay. Your admin connects it, turns on payment for the services you choose and sets the amount. Patients pay inside WhatsApp and the slot is confirmed.</p></details>

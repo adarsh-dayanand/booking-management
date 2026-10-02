@@ -15,7 +15,9 @@
     "dev:web": "npm run dev -w web",
     "build:web": "npm run build -w web",
     "build:all": "npm run build && npm run build:web",
-    "test:web": "npm test -w web"
+    "test:web": "npm test -w web",
+    "predev": "node scripts/ensure-web.js",
+    "prestart": "node scripts/ensure-web.js"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

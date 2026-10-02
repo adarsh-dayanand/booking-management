@@ -88,7 +88,8 @@ resource with Mon–Fri 09:00–17:00 hours, and a staff login:
 npm run dev
 ```
 
-- Consultant dashboard: http://localhost:4000/consultant/
+- Consultant dashboard: http://localhost:4000/consultant/ (after `npm run build:all`, see below)
+- Admin console: http://localhost:4000/admin/ (needs `ADMIN_TOKEN` in `.env`)
 - Health check: http://localhost:4000/health
 
 To try the patient-facing chat widget, create a throwaway local HTML file
@@ -106,16 +107,31 @@ Open it in a browser, click the chat bubble in the bottom-right corner, and
 book an appointment. It'll show up in the consultant dashboard for approval
 (the demo tenant uses `staff_approval` policy).
 
-### The consultant dashboard (React)
+### The dashboards (React)
 
-The dashboard lives in [`web/`](web/) (React + TypeScript + Vite, an npm workspace, so `npm install` at the root covers it). The API server serves its build at **`/consultant/`**:
+Two React + TypeScript + Vite apps live in [`web/`](web/) (an npm workspace, so `npm install` at the root covers them). The API server serves their build:
+
+| App | URL | Who | Sign-in |
+|---|---|---|---|
+| Consultant dashboard | **`/consultant/`** | A clinic's team | Email + password (`/v1/consultant/login`) |
+| Admin console | **`/admin/`** | The platform operator | Paste the `ADMIN_TOKEN` from `.env` |
 
 ```bash
-npm run build:all   # server (tsc) + dashboard (Vite -> public/consultant/)
-npm start           # then open http://localhost:4000/consultant/
+npm run build:all   # server (tsc) + both dashboards (Vite -> web/dist, gitignored)
+npm start           # then open http://localhost:4000/consultant/ or /admin/
 ```
 
-While working on the UI, run the API (`npm run dev`) and `npm run dev:web` side by side; Vite serves the dashboard on http://localhost:5173/consultant/ and proxies `/v1` to the API (set `API_URL` if the API isn't on port 4000). The old `/consultant.html` redirects to `/consultant/`.
+Both apps use the same light theme as the marketing website (Geist, green accent). `npm run dev` and `npm start` build the dashboards first when they're missing or out of date (skip with `SKIP_WEB_BUILD=1`), and `http://localhost:4000/` is a landing page linking to the consultant dashboard, the admin console and the API docs.
+
+While working on the UI, run the API (`npm run dev`) and `npm run dev:web` side by side; Vite serves the apps on http://localhost:5173/consultant/ and /admin/ and proxies `/v1` to the API (set `API_URL` if the API isn't on port 4000). The old `/consultant.html` redirects to `/consultant/`.
+
+**Consultant dashboard** — Overview (today / next 7 days / needs approval / users / revenue, plus a first-run setup checklist), Appointments (filter, search, approve, reject or cancel with a reason, **reschedule to any date and time with a date-time picker** that warns about working hours and blocks overlaps, CSV export), Users (search, history), Services, Practitioners (working hours, holidays, Google Calendar connect), Payments (fees and transactions), Settings (booking flow, timezone, **time slot interval**, WhatsApp, reminders, FAQ, password).
+
+**Admin console** — platform overview, list and onboard consultants (with their first login), edit a consultant, manage its logins, and set up its Razorpay payments (credentials, enable/disable, webhook URL to register).
+
+### Time slot interval
+
+How often a start time is offered is a per-consultant setting (**Settings → Scheduling**, or `slotIntervalMinutes` in `PUT /v1/consultant/settings`): **5 minutes by default**, any value from 5 to 240. With 5, a day offers 9:00, 9:05, 9:10…; with 30, 9:00, 9:30… The chat assistant shows a handful of well-spread times per day and can search near a time ("around 5pm"); the dashboard's reschedule picker steps by the same interval.
 
 ## 6. Run tests
 
@@ -237,7 +253,7 @@ one-row-per-booking model created, by phone number.
 
 | Role | Who | API | UI |
 |---|---|---|---|
-| **Admin** | The platform operator | `/v1/admin/*`, authenticated with `ADMIN_TOKEN` | Swagger (`/docs`) |
+| **Admin** | The platform operator | `/v1/admin/*`, authenticated with `ADMIN_TOKEN` | Admin console at `/admin/` (or Swagger `/docs`) |
 | **Consultant** | A clinic or any similar appointment-based place, and its team | `/v1/consultant/*`, JWT from `POST /v1/consultant/login` | Dashboard at `/consultant/` |
 | **User** | The end user who chats and books, on the web widget or WhatsApp | `/v1/public/*` (no login; identified by phone number) | Chat widget |
 
@@ -246,7 +262,7 @@ one-row-per-booking model created, by phone number.
 Off by default, and off for a consultant until the **admin** turns it on for that consultant:
 
 1. Set `ADMIN_TOKEN` in `.env` (any long random string) and restart.
-2. **Admin** stores the consultant's Razorpay keys (verified against Razorpay, encrypted at rest with `CRYPTO_KEY`):
+2. **Admin** stores the consultant's Razorpay keys (verified against Razorpay, encrypted at rest with `CRYPTO_KEY`). In the admin console: *Consultants → the consultant → Payments*. Or with the API:
    ```bash
    curl -X PUT localhost:4000/v1/admin/tenants/demo-clinic/payments \
      -H "Authorization: Bearer $ADMIN_TOKEN" -H 'content-type: application/json' \
@@ -264,15 +280,11 @@ Payments are confirmed by the webhook, and also by polling Razorpay (the widget 
 
 **Not handled yet:** refunds. If the doctor rejects or a clinic cancels a paid booking, refund it in the Razorpay dashboard. A payment that lands for a booking that was already released is recorded and the clinic is alerted on WhatsApp to refund it.
 
-## Adding a second clinic
+## Adding a consultant (clinic)
 
-No code changes needed:
+The **admin** onboards consultants. In the admin console choose *New consultant*: name, slug, timezone, booking flow and the first login (a password is generated for you to hand over). Or call `POST /v1/admin/tenants`. Nothing is shared between consultants.
 
-```sql
-INSERT INTO tenants (name, slug, timezone, confirmation_policy, whatsapp_phone_number_id)
-VALUES ('Second Clinic', 'second-clinic', 'Asia/Kolkata', 'instant', '<their whatsapp phone number id>');
--- then insert services/resources/availability_rules the same way db/seed.sql does for demo-clinic
-```
+The consultant then signs in at `/consultant/` and sets themselves up: **Services**, **Practitioners** with their **working hours**, optionally a Google Calendar, and **Settings** (the dashboard's Overview shows a checklist until this is done). Admins can add more logins for a consultant's team under *Consultants → Logins*; an email can belong to only one consultant.
 
 Their website embeds `<script src=".../widget.js" data-tenant="second-clinic" defer></script>`,
 and their owner goes through their own `/auth/google/connect` flow for their
@@ -298,9 +310,8 @@ src/
                     admin.ts, consultant.ts, consultantPayments.ts, webChat.ts for users, webhooks)
   jobs/             scheduler.ts (reminders, calendar polling, sync retry)
   __tests__/        vitest suites
-web/                      React + TypeScript consultant dashboard (Vite). Builds into public/consultant/
+web/                      React + TypeScript dashboards (Vite): consultant/ and admin/ pages, shared UI in src/shared. Builds to web/dist
 public/
   widget.js               the embeddable snippet clinics paste into their own site
   widget/chat.html, chat.js, style.css   the chat UI, served in an iframe from this server
-  consultant/             (build output of web/, gitignored)
 ```
