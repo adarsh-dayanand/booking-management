@@ -251,3 +251,16 @@ footer { border-top: 1px solid var(--line); padding: 48px 0 56px; color: var(--i
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .js .reveal { opacity: 1; transform: none; }
 }
+
+/* Legal pages (privacy.html, terms.html) */
+.legal { max-width: 760px; padding: 64px 0 96px; }
+.legal h1 { margin: 12px 0 14px; }
+.legal-meta { color: var(--ink-3); font-size: .95rem; margin-bottom: 36px; }
+.legal h2 { font-size: 1.5rem; letter-spacing: -.02em; line-height: 1.25; margin: 44px 0 12px; }
+.legal h3 { font-size: 1.05rem; margin: 22px 0 8px; }
+.legal p, .legal li { color: var(--ink-2); }
+.legal p { margin-bottom: 14px; }
+.legal ul { margin: 0 0 14px; padding-left: 22px; }
+.legal li { margin-bottom: 6px; }
+.legal a { color: var(--accent); text-underline-offset: 3px; }
+.nav-links a[aria-current="page"] { color: var(--ink); font-weight: 500; }
