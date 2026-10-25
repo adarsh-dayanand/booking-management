@@ -185,12 +185,32 @@ query in the same turn:
 
 ## The agent and the two booking flows
 
-With `GEMINI_API_KEY` set, a Gemini agent ([`src/chat/agent.ts`](src/chat/agent.ts)) talks to patients on WhatsApp and the
+With an LLM key set, an agent ([`src/chat/agent.ts`](src/chat/agent.ts)) talks to patients on WhatsApp and the
 web widget: it books, lists, reschedules and cancels appointments and answers questions from the clinic's FAQ
 text. It can only act through the tools in [`src/chat/agentTools.ts`](src/chat/agentTools.ts), which call `booking.ts` —
 the only code that changes appointments. The tools re-check every slot against clinic hours, existing
 bookings and the doctor's live Google free/busy before booking, so a model-invented time is refused.
 Without a key, the old numbered-menu flow runs (book only; responses say `mode: "guided"`).
+
+**Choosing the model (`.env` only).** One shared set of variables, whichever vendor:
+
+| Variable | |
+|---|---|
+| `LLM_PROVIDER` | `gemini`, `openai` or `anthropic` |
+| `LLM_API_KEY` | that provider's key; blank = numbered-menu fallback |
+| `LLM_MODEL` | optional. Defaults: `gemini-2.5-flash`, `gpt-4.1-mini`, `claude-sonnet-5-5`. Must support tool calling |
+| `LLM_BASE_URL` | optional proxy, or any OpenAI-compatible API (OpenRouter, Groq, Together, Azure, Ollama, ...) with `LLM_PROVIDER=openai` |
+
+The older `GEMINI_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` (and `*_MODEL`, `*_BASE_URL`) still work if the `LLM_*` ones are unset. Conversations are stored provider-neutrally, so changing provider mid-way is safe. `GET /v1/public/:slug/agent/info` shows which provider and model are live.
+
+## Booking alerts for the consultant
+
+When a patient books or requests an appointment (or reschedules or cancels), the clinic is told two ways, independently:
+
+- **WhatsApp** to the *staff WhatsApp number* in Settings (can reply `APPROVE <ref>` / `REJECT <ref>`). Free-text WhatsApp only reaches a number that messaged the bot in the last 24 hours unless `WHATSAPP_NOTIFY_TEMPLATE` is set.
+- **Email** to every dashboard login of that consultant, once `RESEND_API_KEY` and `EMAIL_FROM` are set in `.env` (sent with [Resend](https://resend.com); the sender domain must be verified there). The email links to the dashboard to approve or reject.
+
+A failed alert is logged and never blocks the booking.
 
 Each clinic picks one of two flows (`confirmationPolicy`, via `PUT /v1/consultant/settings`):
 

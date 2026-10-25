@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const generate = vi.fn();
 const executeTool = vi.fn();
-vi.mock("../chat/gemini", async (orig) => ({ ...(await orig<typeof import("../chat/gemini")>()), generate: (...a: unknown[]) => generate(...a) }));
+vi.mock("../chat/llm", async (orig) => ({ ...(await orig<typeof import("../chat/llm")>()), generate: (...a: unknown[]) => generate(...a) }));
 vi.mock("../chat/agentTools", () => ({
   toolDeclarations: [],
   isWriteTool: (n: string) => n === "book_appointment",
@@ -172,8 +172,8 @@ describe("a transient model failure doesn't lose the patient's reply", () => {
   });
 
   it("retries after a 503, and after a reply with no text", async () => {
-    const { GeminiError } = await import("../chat/gemini");
-    generate.mockRejectedValueOnce(new GeminiError("Gemini request failed (503): overloaded")).mockResolvedValueOnce({ candidates: [{ content: { role: "model", parts: [{ text: "", thought: true }] } }] }).mockResolvedValueOnce(text("ok"));
+    const { LlmError } = await import("../chat/llm");
+    generate.mockRejectedValueOnce(new LlmError("Gemini request failed (503): overloaded")).mockResolvedValueOnce({ candidates: [{ content: { role: "model", parts: [{ text: "", thought: true }] } }] }).mockResolvedValueOnce(text("ok"));
     // 503 → retried (attempt 2: a thoughts-only reply, which counts as empty → but that was already the one retry) so this surfaces
     await expect(runTurn(c, ctx(c), [], "hi")).rejects.toThrow("Model returned no text");
     expect(generate).toHaveBeenCalledTimes(2);
@@ -186,8 +186,8 @@ describe("a transient model failure doesn't lose the patient's reply", () => {
   });
 
   it("does not retry a real error such as a bad request", async () => {
-    const { GeminiError } = await import("../chat/gemini");
-    generate.mockRejectedValue(new GeminiError("Gemini request failed (400): invalid argument"));
+    const { LlmError } = await import("../chat/llm");
+    generate.mockRejectedValue(new LlmError("Gemini request failed (400): invalid argument"));
     await expect(runTurn(c, ctx(c), [], "hi")).rejects.toThrow("(400)");
     expect(generate).toHaveBeenCalledTimes(1);
   });

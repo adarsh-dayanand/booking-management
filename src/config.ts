@@ -13,6 +13,28 @@ function optional(name: string): string | undefined {
   return process.env[name] || undefined;
 }
 
+const LLM_PROVIDERS = ["gemini", "openai", "anthropic"] as const;
+const LLM_DEFAULT_BASE_URLS = {
+  gemini: "https://generativelanguage.googleapis.com/v1beta/models",
+  // Any OpenAI-compatible API (OpenRouter, Groq, Together, Azure, Ollama, ...) works by changing LLM_BASE_URL.
+  openai: "https://api.openai.com/v1",
+  anthropic: "https://api.anthropic.com",
+};
+
+function llmSettings() {
+  const legacy = (provider: string, field: string) => optional(`${provider.toUpperCase()}_${field}`);
+  const provider = optional("LLM_PROVIDER")?.toLowerCase() ?? LLM_PROVIDERS.find((p) => legacy(p, "API_KEY"));
+  const known = LLM_PROVIDERS.find((p) => p === provider);
+  return {
+    /** As written in .env (may be invalid); `known` is set only when it is a supported provider. */
+    provider,
+    known,
+    apiKey: optional("LLM_API_KEY") ?? (known && legacy(known, "API_KEY")),
+    model: optional("LLM_MODEL") ?? (known && legacy(known, "MODEL")),
+    baseUrl: (optional("LLM_BASE_URL") ?? (known && legacy(known, "BASE_URL")) ?? (known && LLM_DEFAULT_BASE_URLS[known]) ?? "").replace(/\/+$/, ""),
+  };
+}
+
 export const config = {
   port: Number(process.env.PORT || 4000),
   baseUrl: process.env.BASE_URL || "http://localhost:4000",
@@ -54,11 +76,15 @@ export const config = {
     // How long an unpaid slot is held. Razorpay requires payment links to live at least 15 minutes.
     holdMinutes: Math.max(16, Number(process.env.PAYMENT_HOLD_MINUTES || 20)),
   },
-  gemini: {
-    apiKey: optional("GEMINI_API_KEY"),
-    model: optional("GEMINI_MODEL"),
-    // Override for proxies or tests; defaults to Google's public endpoint.
-    baseUrl: process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/models",
+  // The LLM that runs the booking agent. LLM_PROVIDER = gemini | openai | anthropic, with one shared set of settings.
+  // The older per-provider variables (GEMINI_API_KEY, OPENAI_MODEL, ANTHROPIC_BASE_URL, ...) still work as a fallback.
+  llm: llmSettings(),
+  // Email alerts to the clinic's dashboard logins when a patient books or asks for an appointment, sent with Resend. Off until both are set.
+  email: {
+    resendApiKey: optional("RESEND_API_KEY"),
+    from: optional("EMAIL_FROM"),
+    // Optional: point Resend calls at a proxy or test double.
+    apiBase: (process.env.RESEND_API_BASE || "https://api.resend.com").replace(/\/+$/, ""),
   },
 };
 

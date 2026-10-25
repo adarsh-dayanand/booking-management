@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { patientMessage, staffMessage, type NotifyContext } from "../channels/notify";
+import { patientMessage, staffEmail, staffMessage, type NotifyContext } from "../channels/notify";
 
 const base: NotifyContext = {
   ref: "a1b2c3",
@@ -65,5 +65,21 @@ describe("payment messages", () => {
   it("tells the patient when an unpaid slot is released, and never bothers the doctor", () => {
     expect(patientMessage("payment_expired", "system", base)).toContain("released");
     expect(staffMessage("payment_expired", "system", base)).toBeNull();
+  });
+});
+
+describe("staff email", () => {
+  it("swaps the WhatsApp reply commands for a dashboard link on a request", () => {
+    const email = staffEmail(staffMessage("created", "patient", base)!, true);
+    expect(email.subject).toBe("New appointment request");
+    expect(email.text).toContain("Asha");
+    expect(email.text).not.toContain("APPROVE");
+    expect(email.text).toContain("approve or reject");
+    expect(email.text).toContain("/consultant/");
+  });
+  it("is a plain FYI for an auto-confirmed booking", () => {
+    const email = staffEmail(staffMessage("created", "patient", { ...base, status: "CONFIRMED" })!, false);
+    expect(email.subject).toBe("New booking (auto-confirmed)");
+    expect(email.text).not.toContain("approve or reject");
   });
 });

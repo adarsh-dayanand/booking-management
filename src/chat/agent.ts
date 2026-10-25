@@ -1,7 +1,8 @@
 import { DateTime } from "luxon";
 import { executeTool, isWriteTool, toolDeclarations, type AgentSession, type ToolContext } from "./agentTools";
 import { loadConversation, saveConversation, withConversationLock } from "./conversationStore";
-import { generate, generateStream, GeminiError, type GeminiContent, type GeminiRequest } from "./gemini";
+import type { GeminiContent, GeminiRequest } from "./gemini";
+import { generate, generateStream, LlmError } from "./llm";
 import type { ChatResponse } from "./guidedFlow";
 import { getPatientByPhone, type Patient } from "../booking/patients";
 import { appendPaymentLink } from "../payments/offer";
@@ -121,7 +122,7 @@ interface TurnResult {
 }
 
 const isTransient = (err: unknown): boolean =>
-  err instanceof GeminiError
+  err instanceof LlmError
     ? /Empty model response|Model returned no text|\((429|500|502|503|504)\)/.test(err.message)
     : err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError" || /fetch failed/.test(err.message));
 
@@ -139,11 +140,11 @@ async function modelStep(request: GeminiRequest, options: TurnOptions, step: num
         : await generate(request);
       const content = response.candidates?.[0]?.content;
       if (!content?.parts?.length) {
-        throw new GeminiError(`Empty model response (${response.promptFeedback?.blockReason ?? response.candidates?.[0]?.finishReason ?? "unknown"})`);
+        throw new LlmError(`Empty model response (${response.promptFeedback?.blockReason ?? response.candidates?.[0]?.finishReason ?? "unknown"})`);
       }
       const stepText = content.parts.filter((p) => !p.thought && p.text).map((p) => p.text).join("").trim();
       const calls = content.parts.filter((p) => p.functionCall);
-      if (calls.length === 0 && !stepText) throw new GeminiError("Model returned no text");
+      if (calls.length === 0 && !stepText) throw new LlmError("Model returned no text");
       return { content, stepText, calls };
     } catch (err) {
       if (attempt >= 1 || streamed || !isTransient(err)) throw err;
@@ -153,7 +154,7 @@ async function modelStep(request: GeminiRequest, options: TurnOptions, step: num
   }
 }
 
-/** Runs the Gemini tool-calling loop for one patient message. Throws GeminiError on model/transport failure. */
+/** Runs the model's tool-calling loop for one patient message. Throws LlmError on model/transport failure. */
 export async function runTurn(
   config: TenantConfig,
   toolCtx: ToolContext,
@@ -191,7 +192,7 @@ export async function runTurn(
       }
       working.push({ role: "user", parts: results });
     }
-    throw new GeminiError("Too many tool steps");
+    throw new LlmError("Too many tool steps");
   } catch (err) {
     (err as { wroteSomething?: boolean }).wroteSomething = wroteSomething;
     throw err;

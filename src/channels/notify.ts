@@ -1,6 +1,8 @@
 import { DateTime } from "luxon";
 import { pool } from "../lib/db";
 import * as whatsapp from "./whatsapp";
+import { isEmailConfigured, sendEmail } from "./email";
+import { config } from "../config";
 import { calendarLinks } from "../calendar/addToCalendar";
 
 export type AppointmentEvent = "created" | "paid" | "payment_expired" | "approved" | "rejected" | "cancelled" | "rescheduled" | "reminder";
@@ -79,15 +81,30 @@ export function staffMessage(event: AppointmentEvent, actor: Actor, c: NotifyCon
   }
 }
 
+/** The WhatsApp staff message reworded for email: no APPROVE/REJECT reply commands, a dashboard link instead. */
+export function staffEmail(message: string, pending: boolean): { subject: string; text: string } {
+  const body = message.replace(/\nReply APPROVE[^\n]*$/, "");
+  const action = pending ? "Open your dashboard to approve or reject it" : "Open your dashboard to see the details";
+  return { subject: body.split("\n")[0].replace(/:$/, ""), text: `${body}\n\n${action}: ${config.baseUrl}/consultant/` };
+}
+
+async function emailStaff(tenantId: string, message: string, pending: boolean): Promise<void> {
+  if (!isEmailConfigured()) return;
+  const logins = await pool.query("SELECT email FROM staff_users WHERE tenant_id = $1", [tenantId]);
+  const { subject, text } = staffEmail(message, pending);
+  await sendEmail(logins.rows.map((r) => r.email), subject, text);
+}
+
 async function loadContext(appointmentId: string): Promise<{
   ctx: NotifyContext;
+  tenantId: string;
   phoneNumberId: string | null;
   staffNumber: string | null;
 } | null> {
   const result = await pool.query(
     `SELECT a.id, a.version, a.status, a.channel, a.start_at, a.end_at, a.cancel_reason, a.rejected_reason,
             COALESCE(a.patient_name, p.name) AS patient_name, p.phone AS patient_phone, s.name AS service_name, r.name AS resource_name,
-            t.name AS clinic_name, t.timezone, t.whatsapp_phone_number_id, t.staff_whatsapp_number
+            a.tenant_id, t.name AS clinic_name, t.timezone, t.whatsapp_phone_number_id, t.staff_whatsapp_number
      FROM appointments a
      JOIN patients p ON p.id = a.patient_id
      JOIN services s ON s.id = a.service_id
@@ -99,6 +116,7 @@ async function loadContext(appointmentId: string): Promise<{
   const row = result.rows[0];
   if (!row) return null;
   return {
+    tenantId: row.tenant_id,
     ctx: {
       ref: appointmentRef(row.id),
       status: row.status,
@@ -130,10 +148,18 @@ export async function notifyAppointmentEvent(
   try {
     const loaded = await loadContext(appointmentId);
     if (!loaded) return "skipped";
-    const { ctx, phoneNumberId, staffNumber } = loaded;
+    const { ctx, tenantId, phoneNumberId, staffNumber } = loaded;
 
     const toStaff = staffMessage(event, actor, ctx);
-    if (toStaff && staffNumber) await whatsapp.deliver(phoneNumberId, staffNumber, toStaff);
+    if (toStaff) {
+      // Independent channels: WhatsApp can fail outside its 24h window, so email must not depend on it (or the reverse).
+      await Promise.allSettled([
+        staffNumber ? whatsapp.deliver(phoneNumberId, staffNumber, toStaff) : undefined,
+        emailStaff(tenantId, toStaff, ctx.status === "PENDING_CONFIRMATION"),
+      ]).then((results) =>
+        results.forEach((r) => r.status === "rejected" && console.warn(`[notify] staff alert for ${appointmentId} failed:`, r.reason))
+      );
+    }
 
     const toPatient = patientMessage(event, actor, ctx);
     if (!toPatient) return "skipped";

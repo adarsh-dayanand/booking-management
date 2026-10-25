@@ -65,7 +65,7 @@ Try it end to end: log in via **/v1/consultant/login** (demo: \`owner@demo-clini
 3. With payments active, booking only **holds** the slot (\`AWAITING_PAYMENT\`) and the patient gets a Razorpay payment link — in the chat \`payment\` field on the web, as a link in the message on WhatsApp. Paying confirms the booking (or sends it to the doctor, per the clinic's flow). Unpaid holds are released after \`PAYMENT_HOLD_MINUTES\`.
 4. Register the \`webhookUrl\` from step 1 in Razorpay (event \`payment_link.paid\`). Without a webhook the chat still confirms payments by polling Razorpay.
 
-Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead of the agent (\`mode: "guided"\`).`,
+Without \`LLM_API_KEY\` the service runs a plain numbered-menu flow instead of the agent (\`mode: "guided"\`).`,
   },
   servers: [{ url: "/" }],
   tags: [
@@ -474,7 +474,7 @@ Without \`GEMINI_API_KEY\` the service runs a plain numbered-menu flow instead o
         type: "object",
         properties: {
           replyText: { type: "string" },
-          mode: { type: "string", enum: ["agent", "guided"], description: "`guided` = no GEMINI_API_KEY, numbered-menu fallback." },
+          mode: { type: "string", enum: ["agent", "guided"], description: "`guided` = no LLM_API_KEY, numbered-menu fallback." },
           options: { type: "array", items: { type: "object", properties: { id: { type: "string" }, label: { type: "string" } } }, description: "Menu buttons (guided mode only)." },
           payment: {
             type: "object",

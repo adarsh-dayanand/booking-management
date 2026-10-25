@@ -5,7 +5,7 @@ import { config } from "../../config";
 import { handleIncomingMessage } from "../../chat/conversation";
 import { pool } from "../../lib/db";
 import { ForbiddenError, ValidationError } from "../../errors";
-import { DEFAULT_MODEL, isAiConfigured } from "../../chat/gemini";
+import { activeModel, activeProvider, isAiConfigured } from "../../chat/llm";
 import { isPlausiblePhone, normalizePhone } from "../../lib/phone";
 import { touchPatient } from "../../booking/patients";
 import { loadConversation, saveConversation, withConversationLock } from "../../chat/conversationStore";
@@ -158,8 +158,9 @@ webChatRouter.get("/:tenantSlug/agent/info", async (req, res, next) => {
     const agent = isAiConfigured();
     res.json({
       mode: agent ? "agent" : "guided",
-      note: agent ? undefined : "No GEMINI_API_KEY set: the deterministic numbered-menu flow is running instead of the agent.",
-      model: agent ? config.gemini.model || DEFAULT_MODEL : null,
+      note: agent ? undefined : "LLM_PROVIDER / LLM_API_KEY not set: the deterministic numbered-menu flow is running instead of the agent.",
+      provider: agent ? activeProvider() : null,
+      model: agent ? activeModel() : null,
       bookingFlow: tenantConfig.tenant.confirmationPolicy,
       systemPrompt: buildSystemPrompt(tenantConfig),
       tools: toolDeclarations,

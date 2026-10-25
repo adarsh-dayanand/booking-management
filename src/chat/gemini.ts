@@ -1,8 +1,7 @@
 import { config } from "../config";
+import { LlmError } from "./llmError";
 
 export const DEFAULT_MODEL = "gemini-2.5-flash";
-
-export const isAiConfigured = (): boolean => Boolean(config.gemini.apiKey);
 
 export interface GeminiPart {
   text?: string;
@@ -29,14 +28,14 @@ export interface GeminiResponse {
   promptFeedback?: { blockReason?: string };
 }
 
-export class GeminiError extends Error {}
+export class GeminiError extends LlmError {}
 
 export async function generate(request: GeminiRequest, timeoutMs = 25_000): Promise<GeminiResponse> {
-  if (!config.gemini.apiKey) throw new GeminiError("GEMINI_API_KEY is not set");
-  const model = config.gemini.model || DEFAULT_MODEL;
-  const response = await fetch(`${config.gemini.baseUrl}/${encodeURIComponent(model)}:generateContent`, {
+  if (!config.llm.apiKey) throw new GeminiError("LLM_API_KEY is not set");
+  const model = config.llm.model || DEFAULT_MODEL;
+  const response = await fetch(`${config.llm.baseUrl}/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
-    headers: { "x-goog-api-key": config.gemini.apiKey, "content-type": "application/json" },
+    headers: { "x-goog-api-key": config.llm.apiKey, "content-type": "application/json" },
     body: JSON.stringify(request),
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -54,11 +53,11 @@ export async function generateStream(
   onText: (text: string) => void,
   timeoutMs = 60_000
 ): Promise<GeminiResponse> {
-  if (!config.gemini.apiKey) throw new GeminiError("GEMINI_API_KEY is not set");
-  const model = config.gemini.model || DEFAULT_MODEL;
-  const response = await fetch(`${config.gemini.baseUrl}/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
+  if (!config.llm.apiKey) throw new GeminiError("LLM_API_KEY is not set");
+  const model = config.llm.model || DEFAULT_MODEL;
+  const response = await fetch(`${config.llm.baseUrl}/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
     method: "POST",
-    headers: { "x-goog-api-key": config.gemini.apiKey, "content-type": "application/json" },
+    headers: { "x-goog-api-key": config.llm.apiKey, "content-type": "application/json" },
     body: JSON.stringify(request),
     signal: AbortSignal.timeout(timeoutMs),
   });

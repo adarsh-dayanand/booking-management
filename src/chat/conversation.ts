@@ -1,11 +1,11 @@
 import { handleAgentMessage, type AgentMessageOptions } from "./agent";
-import { isAiConfigured } from "./gemini";
+import { isAiConfigured } from "./llm";
 import { handleGuidedMessage, type ChatResponse } from "./guidedFlow";
 import { loadTenantConfig } from "../booking/tenant";
 import type { Channel } from "../types";
 
 /**
- * The single entry point for patient chat on both channels. With GEMINI_API_KEY set, the Gemini agent
+ * The single entry point for patient chat on both channels. With LLM_API_KEY set, the agent
  * handles the conversation (its tools call booking.ts, the only thing that changes appointments);
  * without it, the deterministic numbered-menu flow runs.
  */

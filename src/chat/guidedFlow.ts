@@ -44,7 +44,7 @@ export interface ChatResponse {
 }
 
 /**
- * Deterministic numbered-menu flow — the fallback when no GEMINI_API_KEY is configured (it can only book;
+ * Deterministic numbered-menu flow — the fallback when no LLM_API_KEY is configured (it can only book;
  * cancel/reschedule need the agent). conversation.ts picks between this and agent.ts; neither the web route
  * nor the WhatsApp webhook contains booking logic of its own — booking.ts underneath is the whole engine.
  */
